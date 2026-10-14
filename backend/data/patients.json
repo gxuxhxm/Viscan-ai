@@ -1,0 +1,42 @@
+[
+  {
+    "id": "P001",
+    "name": "Priya Sharma",
+    "dob": "1988-03-15",
+    "gender": "F",
+    "phone": "+91-98765-43210",
+    "email": "priya.sharma@example.com"
+  },
+  {
+    "id": "P002",
+    "name": "Priyanka Sharma",
+    "dob": "1992-07-22",
+    "gender": "F",
+    "phone": "+91-98765-11111",
+    "email": "priyanka.sharma@example.com"
+  },
+  {
+    "id": "P003",
+    "name": "Arjun Mehta",
+    "dob": "1975-11-08",
+    "gender": "M",
+    "phone": "+91-99900-55555",
+    "email": "arjun.mehta@example.com"
+  },
+  {
+    "id": "P004",
+    "name": "Sana Khan",
+    "dob": "2001-05-30",
+    "gender": "F",
+    "phone": "+91-88800-44444",
+    "email": "sana.khan@example.com"
+  },
+  {
+    "id": "P005",
+    "name": "Rohan Verma",
+    "dob": "1965-09-12",
+    "gender": "M",
+    "phone": "+91-77700-33333",
+    "email": "rohan.verma@example.com"
+  }
+]
