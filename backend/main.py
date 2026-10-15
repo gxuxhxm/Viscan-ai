@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,6 +57,32 @@ app.add_middleware(
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+# Canned assistant replies. These are deterministic on purpose: a greeting
+# answer and the truthful assistant-identity answer must never be paraphrased
+# (or worse, misattributed) by a language model.
+GREETING_MESSAGE = (
+    "Hi! I can help retrieve reports, structure clinical dictation, and summarize reports."
+)
+ASSISTANT_IDENTITY_MESSAGE = (
+    "I'm Viscan AI, a dental radiology assistant — not Gemini myself. "
+    "This app uses the Google Gemini API for its supported AI tasks "
+    "(interpreting your messages, structuring dictation, and answering questions "
+    "about open reports). Report retrieval and the safety checks run in the app's "
+    "own code, not in a language model."
+)
+UNSUPPORTED_MESSAGE = (
+    "I can help with radiology reports and clinical dictation, but I couldn't turn "
+    "that into a radiology request. Try something like \"Open Priya Sharma's latest "
+    "OPG report\", \"Show Rohan Verma's bitewing report\", or dictate findings in "
+    "the Dictation tab."
+)
+LLM_FALLBACK_MESSAGE = (
+    "I couldn't reach the AI service right now, so I could only try simple report "
+    "commands (like \"Open Priya Sharma's latest OPG report\"). Please try again in "
+    "a moment."
+)
+
+
 def _build_report_detail(report: dict) -> ReportDetail:
     return ReportDetail(
         id=report["id"],
@@ -69,6 +94,10 @@ def _build_report_detail(report: dict) -> ReportDetail:
         findings=[FindingItem(**f) for f in report.get("findings", [])],
         impression=report["impression"],
         draft_report=report["draft_report"],
+        tooth_number=report.get("tooth_number"),
+        encounter_type=report.get("encounter_type"),
+        procedure_date=report.get("procedure_date"),
+        billing_codes=report.get("billing_codes"),
     )
 
 
@@ -102,6 +131,10 @@ def get_patient_reports(patient_id: str):
             radiologist=r["radiologist"],
             status=r["status"],
             impression=r["impression"],
+            tooth_number=r.get("tooth_number"),
+            encounter_type=r.get("encounter_type"),
+            procedure_date=r.get("procedure_date"),
+            billing_codes=r.get("billing_codes"),
         )
         for r in reports
     ]
@@ -131,13 +164,23 @@ def query_endpoint(req: QueryRequest):
     intent = interpreted.intent
     patient_name = interpreted.patient_name
     report_type = interpreted.report_type
+    fallback_reason = interpreted.fallback_reason
 
     matched_patients: list[PatientSummary] = []
     report_detail: ReportDetail | None = None
     ambiguous = False
     message = ""
 
-    if intent == "retrieve_report":
+    if intent == "greeting":
+        message = GREETING_MESSAGE
+    elif intent == "assistant_identity":
+        # Truthful, canned answer — never claim the app IS Gemini.
+        message = ASSISTANT_IDENTITY_MESSAGE
+    elif intent in ("unsupported", "unknown"):
+        # When the LLM was unavailable, say so clearly instead of pretending
+        # the message was an unrecognised report command.
+        message = LLM_FALLBACK_MESSAGE if fallback_reason else UNSUPPORTED_MESSAGE
+    elif intent == "retrieve_report":
         if not patient_name:
             message = "I couldn't identify a patient name in your request. Please specify the patient's name."
         else:
@@ -151,7 +194,13 @@ def query_endpoint(req: QueryRequest):
                 ]
 
             if len(candidates) == 0:
-                message = f"No patient found matching '{patient_name}'. Please check the name and try again."
+                from services.retrieval import _load_patients
+                known = ", ".join(p["name"] for p in _load_patients())
+                message = (
+                    f"No patient found matching '{patient_name}' in this clinic's records — "
+                    f"I only retrieve patients that actually exist, so I won't invent one. "
+                    f"Known patients: {known}. Please check the name and try again."
+                )
             elif len(exact_matches) == 1:
                 # Deterministic business rule: an exact full-name match resolves
                 # to that patient, even when a similar name also scores high.
@@ -207,10 +256,13 @@ def query_endpoint(req: QueryRequest):
             else:
                 message = "Session report not found. Please open a report first."
     else:
-        message = "I didn't understand your request. Try: 'Open Priya's latest OPG report' or 'Show Rohan's reports'."
+        # Defensive: the intent validator guarantees one of the branches above
+        # matched; never surface a raw intent at the user.
+        message = UNSUPPORTED_MESSAGE
 
-    if interpreted.fallback_reason:
-        message = f"{message} (Note: {interpreted.fallback_reason})"
+    # Transparency note, except where the message already explains the outage.
+    if fallback_reason and intent not in ("unsupported", "unknown"):
+        message = f"{message} (Note: {fallback_reason})"
 
     return QueryResponse(
         intent=intent,
@@ -221,6 +273,7 @@ def query_endpoint(req: QueryRequest):
         ambiguous=ambiguous,
         demo_mode=DEMO_MODE,
         message=message,
+        fallback_reason=fallback_reason,
     )
 
 
@@ -244,6 +297,9 @@ def dictation_endpoint(req: DictationRequest):
         uncertainties=structured.uncertainties,
         requires_review=True,
         demo_mode=DEMO_MODE,
+        fallback_reason=structured.fallback_reason,
+        metadata=structured.metadata,
+        transcript=structured.transcript,
     )
 
 

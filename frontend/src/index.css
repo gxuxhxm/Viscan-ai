@@ -526,3 +526,72 @@ body {
   border-radius: var(--radius-lg);
   padding: 16px;
 }
+
+/* ── PRINT ──────────────────────────────────────────────────────────────── */
+@media print {
+  /* Hide app chrome — only the open report document prints */
+  .top-nav,
+  .panel-left,
+  .panel-right,
+  .demo-banner,
+  .backend-error-bar {
+    display: none !important;
+  }
+
+  /* Un-fix the app shell so the document flows naturally */
+  html,
+  body {
+    background: #fff !important;
+    height: auto !important;
+  }
+  #root {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  .app-layout {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .panel-center {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .panel-center > div:not(.scroll-y) { /* patient header, ambiguity card */
+    display: none !important;
+  }
+  .scroll-y {
+    overflow: visible !important;
+    height: auto !important;
+    display: block !important;
+  }
+  /* Print only the report detail (and its open draft), not list/dictation */
+  .scroll-y > *:not(.print-doc) {
+    display: none !important;
+  }
+
+  /* Render the document black-on-white, full width */
+  .print-doc {
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .print-doc,
+  .print-doc * {
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+  .print-doc * {
+    background: transparent !important;
+  }
+
+  @page {
+    margin: 16mm;
+  }
+}

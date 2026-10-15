@@ -23,6 +23,10 @@ from services.retrieval import (
 from services.llm_service import (
     _demo_interpret_query,
     _demo_structure_dictation,
+    structure_dictation,
+    _split_metadata,
+    _is_metadata_finding,
+    _describe_llm_error,
 )
 
 
@@ -338,3 +342,272 @@ def test_follow_up_verbatim_evidence_kept(monkeypatch):
     result = llm_service.answer_follow_up("What are the findings?", report)
     assert result["evidence"] == [obs]
     assert result["answer"]
+
+
+# ── Transcript metadata split ────────────────────────────────────────────────
+
+def test_split_metadata_separates_header_from_clinical():
+    """`name:`/`dob:`/`tooth:` header lines are lifted out as metadata; the
+    clinical narrative is left intact for structuring."""
+    transcript = (
+        "name: Priya Sharma\n"
+        "dob: 1990-05-14\n"
+        "tooth: 26\n"
+        "Mild bone loss noted at lower left molar."
+    )
+    clinical, meta = _split_metadata(transcript)
+    assert meta == {"name": "Priya Sharma", "dob": "1990-05-14", "tooth": "26"}
+    assert "name:" not in clinical and "dob:" not in clinical
+    assert "Mild bone loss" in clinical
+
+
+def test_split_metadata_mixed_line_stays_clinical():
+    """A line beginning with a key but carrying a sentence must NOT be
+    swallowed into metadata — clinical content is preserved."""
+    clinical, meta = _split_metadata("name: Priya. Mild bone loss at 46.")
+    assert "name" not in meta
+    assert "Mild bone loss" in clinical
+
+
+def test_metadata_only_input_yields_no_findings():
+    """Header-only input returns an explicit, non-AI-structured result with the
+    original transcript and metadata echoed."""
+    transcript = "name: Priya Sharma\ndob: 1990-05-14"
+    result = structure_dictation(transcript)
+    assert result.findings == []
+    assert result.fallback_reason is not None
+    assert "no clinical findings" in result.fallback_reason.lower()
+    assert result.transcript == transcript
+    assert result.metadata == {"name": "Priya Sharma", "dob": "1990-05-14"}
+    assert result.requires_review is True
+
+
+def test_is_metadata_finding_detects_header_line():
+    assert _is_metadata_finding("name: Priya Sharma") is True
+    assert _is_metadata_finding("tooth: 26") is True
+    # A clinical sentence is never treated as a metadata finding
+    assert _is_metadata_finding("Mild bone loss at lower left molar.") is False
+
+
+# ── Provenance / fallback flag ───────────────────────────────────────────────
+
+def test_provider_error_sets_fallback_reason(monkeypatch):
+    """A provider failure must set fallback_reason so the UI can label the
+    result as not AI-generated."""
+    llm_service = _force_live_mode(monkeypatch)
+
+    def _boom(*args, **kwargs):
+        raise TimeoutError("provider timeout")
+
+    monkeypatch.setattr(llm_service, "_call_llm", _boom)
+    result = llm_service.structure_dictation("Mild bone loss noted at lower left molar.")
+    assert result.fallback_reason is not None
+    assert "provider unavailable" in result.fallback_reason.lower()
+    assert result.requires_review is True
+
+
+def test_grounded_ai_result_has_no_fallback_reason(monkeypatch):
+    """A valid, grounded AI response is genuinely AI-structured → no fallback."""
+    llm_service = _force_live_mode(monkeypatch)
+    raw = json.dumps({
+        "findings": [
+            {"site": "lower left molar", "observation": "Mild bone loss noted at lower left molar", "severity": "mild"},
+        ],
+        "anatomical_site": "lower left molar",
+        "draft_report": "CLINICAL DICTATION DRAFT\nMild bone loss noted at lower left molar.",
+        "uncertainties": [],
+        "requires_review": True,
+    })
+    monkeypatch.setattr(llm_service, "_call_llm", lambda *a, **k: raw)
+    result = llm_service.structure_dictation("Mild bone loss noted at lower left molar.")
+    assert result.fallback_reason is None
+    assert len(result.findings) == 1
+
+
+def test_http_error_carries_status_detail():
+    """HTTP provider errors surface their status (e.g. rate limiting)."""
+
+    class _Resp:
+        status_code = 429
+        reason_phrase = "Too Many Requests"
+
+    class _Exc(Exception):
+        response = _Resp()
+
+    assert _describe_llm_error(_Exc()) == "HTTP 429 rate limited"
+
+
+# ── Grounding tolerance & no-name-as-finding ─────────────────────────────────
+
+def test_grounding_reworded_finding_survives(monkeypatch):
+    """A reworded-but-supported finding must survive grounding (the old
+    byte-for-byte substring check dropped it as a false 'not present')."""
+    llm_service = _force_live_mode(monkeypatch)
+    transcript = "Periapical radiolucency at tooth 26, approximately 4mm."
+    raw = json.dumps({
+        "findings": [
+            {"site": "tooth 26", "observation": "A periapical radiolucency of about 4mm is present at tooth 26.", "severity": "moderate"},
+        ],
+        "anatomical_site": "tooth 26",
+        "draft_report": "CLINICAL DICTATION DRAFT\nPeriapical radiolucency at tooth 26.",
+        "uncertainties": [],
+        "requires_review": True,
+    })
+    monkeypatch.setattr(llm_service, "_call_llm", lambda *a, **k: raw)
+    result = llm_service.structure_dictation(transcript)
+    assert len(result.findings) == 1
+    assert result.fallback_reason is None
+
+
+def test_no_name_as_finding_dropped(monkeypatch):
+    """A patient-name header echoed back as a finding must never surface as
+    clinical content, and must not survive grounding."""
+    llm_service = _force_live_mode(monkeypatch)
+    transcript = "Mild bone loss noted at lower left molar."
+    raw = json.dumps({
+        "findings": [
+            {"site": "see header", "observation": "name: Priya Sharma", "severity": "unspecified"},
+            {"site": "lower left molar", "observation": "Mild bone loss noted at lower left molar", "severity": "mild"},
+        ],
+        "anatomical_site": "lower left molar",
+        "draft_report": "CLINICAL DICTATION DRAFT\nMild bone loss noted at lower left molar.",
+        "uncertainties": [],
+        "requires_review": True,
+    })
+    monkeypatch.setattr(llm_service, "_call_llm", lambda *a, **k: raw)
+    result = llm_service.structure_dictation(transcript)
+    joined = " ".join(str(f.get("observation", "")) for f in result.findings)
+    assert "Priya Sharma" not in joined
+    assert len(result.findings) == 1
+
+
+# ── New additive report fields ───────────────────────────────────────────────
+
+def test_report_records_carry_new_fields():
+    report = get_report_by_id("R001")
+    assert report["tooth_number"] == "26"
+    assert report["encounter_type"] == "initial"
+    assert report["procedure_date"] == report["date"]
+    assert report["billing_codes"]["cdt_proposed"] == "D0150"
+    f = report["findings"][0]
+    assert f["category"] == "Periapical pathology"
+    assert f["resolution_plan"]
+    assert isinstance(f["complication_detected"], bool)
+
+
+def test_report_record_null_tooth_and_billing():
+    report = get_report_by_id("R004")  # bitewing, no single tooth
+    assert report["tooth_number"] is None
+    assert report["billing_codes"]["icd_10"] is None
+    assert report["billing_codes"]["cdt_proposed"] == "D0274"
+
+
+# ── Conversational fallbacks (demo mode / provider failure) ──────────────────
+
+def test_demo_interpret_greeting_only_for_bare_salutations():
+    """The deterministic fallback recognises only bare salutations — it is not
+    a conversational parser."""
+    assert _demo_interpret_query("hi").intent == "greeting"
+    assert _demo_interpret_query("Hello there!").intent == "greeting"
+    assert _demo_interpret_query("good morning").intent == "greeting"
+    # A salutation glued to a real task is NOT a greeting
+    assert _demo_interpret_query("hi, open Priya's OPG report").intent == "retrieve_report"
+
+
+def test_demo_interpret_identity_question():
+    assert _demo_interpret_query("Are you Gemini?").intent == "assistant_identity"
+    assert _demo_interpret_query("Who are you?").intent == "assistant_identity"
+    # A normal report question is never mistaken for an identity question
+    assert _demo_interpret_query("Show Rohan Verma's bitewing report").intent == "retrieve_report"
+
+
+def test_demo_interpret_unknown_patient_shorthand():
+    """"Rahul report" / "open rahul report" extract the patient name so a real
+    lookup happens; generic nouns never become names."""
+    r = _demo_interpret_query("Rahul report")
+    assert r.intent == "retrieve_report" and r.patient_name == "Rahul"
+    r = _demo_interpret_query("open rahul report")
+    assert r.intent == "retrieve_report" and r.patient_name == "Rahul"
+    r = _demo_interpret_query("Priya Sharma report")
+    assert r.intent == "retrieve_report" and r.patient_name == "Priya Sharma"
+    # Request vocabulary is never a name
+    assert _demo_interpret_query("the report").patient_name is None
+    assert _demo_interpret_query("Summarize her report").patient_name is None
+
+
+# ── Gemini classifies chat messages (stubbed LLM, no paid calls) ────────────
+
+def test_interpret_greeting_via_llm(monkeypatch):
+    """Natural greeting phrasing is classified as a greeting by the LLM."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm", lambda *a, **k: json.dumps({"intent": "greeting"})
+    )
+    result = llm_service.interpret_query("well hello there, how are things going today?")
+    assert result.intent == "greeting"
+    assert result.fallback_reason is None
+
+
+def test_interpret_identity_via_llm(monkeypatch):
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({"intent": "assistant_identity"}),
+    )
+    result = llm_service.interpret_query("just curious — which model am i talking to?")
+    assert result.intent == "assistant_identity"
+    assert result.fallback_reason is None
+
+
+def test_interpret_unsupported_via_llm(monkeypatch):
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({"intent": "unsupported"}),
+    )
+    result = llm_service.interpret_query("explain photosynthesis please")
+    assert result.intent == "unsupported"
+
+
+def test_interpret_contextual_follow_up_via_llm(monkeypatch):
+    """"Give me a summary" is classified by the LLM as a contextual follow-up."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm", lambda *a, **k: json.dumps({"intent": "follow_up"})
+    )
+    result = llm_service.interpret_query(
+        "Give me a summary", {"active_report_id": "R001"}
+    )
+    assert result.intent == "follow_up"
+
+
+def test_chat_and_dictation_actually_call_the_llm(monkeypatch):
+    """Spy: every chat and dictation request must really hit the provider."""
+    llm_service = _force_live_mode(monkeypatch)
+    calls = []
+
+    def _spy(system, user):
+        calls.append(user)
+        return json.dumps({"intent": "greeting"})
+
+    monkeypatch.setattr(llm_service, "_call_llm", _spy)
+    llm_service.interpret_query("hi")
+    assert len(calls) == 1
+
+    result = llm_service.structure_dictation("Mild bone loss noted at lower left molar.")
+    assert len(calls) == 2  # the dictation request also reached the provider
+    assert result.fallback_reason is not None  # (stubbed output failed validation)
+
+
+def test_greeting_request_routed_through_gemini(monkeypatch):
+    """With a Gemini key configured, a chat request goes through _call_gemini."""
+    from services import llm_service
+    monkeypatch.setattr(llm_service, "GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm_service, "DEMO_MODE", False)
+    monkeypatch.setattr(
+        llm_service, "_call_gemini",
+        lambda s, u: json.dumps({"intent": "greeting"}),
+    )
+    result = llm_service.interpret_query("hi")
+    assert result.intent == "greeting"
+    assert result.fallback_reason is None

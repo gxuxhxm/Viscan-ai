@@ -48,8 +48,8 @@ Viscan AI is a dental radiology assistant POC. It separates LLM interpretation f
 └─────────────────────────────────────────────────────────────────┘
                              │
                       ┌──────┴──────┐
-                      │  OpenAI API  │  (optional)
-                      │  gpt-4o-mini │
+                      │  Gemini API │  (when GEMINI_API_KEY set)
+                      │  flash-tier │
                       └─────────────┘
 ```
 
@@ -65,7 +65,8 @@ User types: "Open Priya's latest OPG report"
      ▼ POST /query
 llm_service.interpret_query(text)
      │
-     ├─ Live: OpenAI → JSON intent
+     ├─ Live: Gemini → JSON intent (greeting / assistant_identity /
+     │         retrieve_report / dictation / follow_up / unsupported)
      └─ Demo: regex heuristic → intent
      │
      ▼ InterpretedQuery validated by Pydantic
@@ -91,7 +92,7 @@ Clinician types transcript
      ▼ POST /dictation
 llm_service.structure_dictation(transcript)
      │
-     ├─ Live: OpenAI → structured JSON
+     ├─ Live: Gemini → structured JSON
      └─ Demo: minimal passthrough
      │
      ▼ StructuredDictation validated by Pydantic
@@ -137,6 +138,8 @@ report first (no context is invented).
 | Always requires review | `requires_review` validator always returns `True` in StructuredDictation |
 | Source evidence shown | Every follow-up answer includes the exact finding text used |
 | Graceful LLM failure | Provider errors and malformed/non-JSON LLM output fall back to deterministic parsers (surfaced via `fallback_reason` / uncertainties), never a 500 |
+| Honest assistant identity | Greeting and "Are you Gemini?" replies are canned deterministic text — the app states it *uses* the Gemini API and never claims to be Gemini |
+| Natural phrasing via Gemini | Greetings, identity questions, retrieval requests and contextual follow-ups are classified by Gemini, not a hardcoded keyword list; deterministic code is only used for real report retrieval, safety checks, and a minimal demo/fallback path |
 | Ambiguity surfaced | Exact full names resolve deterministically; partial names matching 2+ patients within a 0.20 gap trigger disambiguation, not silent selection |
 | No real patient data | All 10 reports are fully synthetic; no PII involved |
 

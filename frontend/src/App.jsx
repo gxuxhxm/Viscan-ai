@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  Search, ChevronRight, FileText, User, MessageSquare,
+  Search, ChevronRight, FileText, User,
   Mic, Send, AlertTriangle, CheckCircle, Loader2,
-  X, ChevronDown, Edit3, Zap, Shield,
+  X, ChevronDown, Edit3, Zap, Printer,
   Activity, Calendar, Stethoscope, Radio, Info, Square,
 } from 'lucide-react';
 import { api } from './api.js';
@@ -76,24 +76,48 @@ function FindingCard({ finding }) {
     <div className={`report-finding ${sev}`} style={{ marginBottom: 8 }}>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 4 }}>
         <span className="type-eyebrow" style={{ color: 'var(--color-ink-muted)' }}>{finding.site || 'Unspecified site'}</span>
-        <span className={`type-caption ${severityClass(finding.severity)}`}
-          style={{ padding: '1px 6px', borderRadius: 'var(--radius-xs)' }}>
-          {finding.severity || 'unspecified'}
+        <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {finding.category && (
+            <span className="type-caption" style={{ color: 'var(--color-ink-tertiary)' }}>{finding.category}</span>
+          )}
+          <span className={`type-caption ${severityClass(finding.severity)}`}
+            style={{ padding: '1px 6px', borderRadius: 'var(--radius-xs)' }}>
+            {finding.severity || 'unspecified'}
+          </span>
         </span>
       </div>
       <p className="type-body-sm" style={{ margin: 0, color: 'var(--color-ink)' }}>{finding.observation}</p>
+      {(finding.complication_detected || finding.resolution_plan) && (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {finding.complication_detected && (
+            <span className="type-caption" style={{ color: 'var(--color-semantic-error)', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <AlertTriangle size={11} /> Complication detected
+            </span>
+          )}
+          {finding.resolution_plan && (
+            <span className="type-caption" style={{ color: 'var(--color-ink-muted)' }}>
+              Plan: {finding.resolution_plan}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Full Report Detail ───────────────────────────────────────────────────────
-function ReportDetail({ report, patient, onFollowUpClick }) {
+function ReportDetail({ report, patient }) {
   const [showDraft, setShowDraft] = useState(false);
 
   if (!report) return null;
 
+  const metaLine = [
+    report.encounter_type,
+    report.tooth_number ? `Tooth ${report.tooth_number}` : null,
+  ].filter(Boolean).join(' · ');
+
   return (
-    <div className="animate-fade-up" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, height: '100%' }}>
+    <div className="animate-fade-up print-doc" style={{ padding: 24, paddingBottom: 32, display: 'flex', flexDirection: 'column', gap: 20, minHeight: '100%' }}>
       {/* Header */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <div>
@@ -116,11 +140,13 @@ function ReportDetail({ report, patient, onFollowUpClick }) {
             <span className="type-body-sm" style={{ color: 'var(--color-ink-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
               <Stethoscope size={13} /> {report.radiologist}
             </span>
+            {metaLine && (
+              <span className="type-body-sm" style={{ color: 'var(--color-ink-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Activity size={13} /> {metaLine}
+              </span>
+            )}
           </div>
         </div>
-        <button className="btn-fin" onClick={onFollowUpClick} style={{ gap: 6 }}>
-          <MessageSquare size={15} /> Ask AI
-        </button>
       </div>
 
       {/* Findings */}
@@ -137,24 +163,33 @@ function ReportDetail({ report, patient, onFollowUpClick }) {
         <p className="type-body" style={{ margin: 0 }}>{report.impression}</p>
       </div>
 
-      {/* Draft Report Toggle */}
+      {/* Proposed billing (synthetic, never verified) */}
+      {report.billing_codes && (
+        <p className="type-caption" style={{ color: 'var(--color-ink-tertiary)', margin: 0 }}>
+          Proposed billing (not verified): ICD-10 {report.billing_codes.icd_10 || '—'} · CDT {report.billing_codes.cdt_proposed || '—'}
+        </p>
+      )}
+
+      {/* Draft Report Toggle + Print */}
       <div>
-        <button className="btn-secondary" onClick={() => setShowDraft(s => !s)} style={{ width: '100%', justifyContent: 'space-between' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FileText size={15} /> Draft Report
-          </span>
-          <ChevronDown size={15} style={{ transform: showDraft ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn-secondary" onClick={() => setShowDraft(s => !s)}
+            style={{ flex: 1, justifyContent: 'space-between', minHeight: 36, fontSize: 13, padding: '6px 12px' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <FileText size={14} /> Draft Report
+            </span>
+            <ChevronDown size={14} style={{ transform: showDraft ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+          </button>
+          <button className="btn-secondary" onClick={() => window.print()} title="Print report"
+            style={{ minHeight: 36, fontSize: 13, padding: '6px 12px', gap: 6 }}>
+            <Printer size={14} /> Print
+          </button>
+        </div>
         {showDraft && (
           <div className="animate-fade-up" style={{
             marginTop: 8, background: 'var(--color-surface-1)', border: '1px solid var(--color-hairline)',
             borderRadius: 'var(--radius-md)', padding: 16,
           }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-              <span className="type-caption" style={{ color: 'var(--color-fin-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Shield size={11} /> Clinician review required before use
-              </span>
-            </div>
             <pre style={{
               fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7,
               color: 'var(--color-ink)', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
@@ -410,7 +445,7 @@ function ConversationPanel({ messages, loading, activeReportId, onSend }) {
               <span className="pulse-dot" style={{
                 width: 6, height: 6, borderRadius: '50%', background: 'var(--color-semantic-error)',
               }} />
-              Listening… speak now, then tap stop to submit
+              Listening… speak now — it stops and submits automatically after a pause
             </span>
           )}
           {!speech.listening && speech.error && (
@@ -462,8 +497,17 @@ function DictationPanel({ result, loading, onSubmit }) {
     onSubmit(transcript);
   };
 
+  // Provenance of the latest structured result (drives the header chip).
+  const provenance = result
+    ? (result.demo_mode
+        ? { label: 'Demo mode', color: 'var(--color-ink-tertiary)' }
+        : result.fallback_reason
+          ? { label: `Fallback — not AI-generated: ${result.fallback_reason}`, color: 'var(--color-semantic-error)' }
+          : { label: 'AI-structured (Gemini)', color: 'var(--color-semantic-success)' })
+    : null;
+
   return (
-    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20, height: '100%', overflowY: 'auto' }}>
+    <div style={{ padding: 24, paddingBottom: 32, display: 'flex', flexDirection: 'column', gap: 20, minHeight: '100%', overflowY: 'auto' }}>
       <div>
         <h2 className="type-card-title" style={{ margin: 0, marginBottom: 4 }}>Clinical Dictation</h2>
         <p className="type-body-sm" style={{ color: 'var(--color-ink-muted)', margin: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -475,7 +519,7 @@ function DictationPanel({ result, loading, onSubmit }) {
       <div className="review-banner">
         <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
         <div>
-          <strong>Clinician review required.</strong> AI-structured output must be verified before use. Never use unsupervised output in clinical documentation.
+          <strong>Clinician review required.</strong> AI-structured output must be verified before use.
         </div>
       </div>
 
@@ -530,7 +574,7 @@ function DictationPanel({ result, loading, onSubmit }) {
               <span className="pulse-dot" style={{
                 width: 6, height: 6, borderRadius: '50%', background: 'var(--color-semantic-error)',
               }} />
-              Dictating… speak naturally, then tap stop to structure automatically
+              Dictating… speak naturally — it stops and submits automatically after a pause
             </span>
           )}
           {!speech.listening && speech.error && (
@@ -570,6 +614,20 @@ function DictationPanel({ result, loading, onSubmit }) {
 
       {result && !loading && (
         <div className="animate-fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Provenance chip */}
+          {provenance && (
+            <span className="type-caption" style={{
+              color: provenance.color, alignSelf: 'flex-start',
+              border: '1px solid var(--color-hairline)', borderRadius: 'var(--radius-xs)',
+              padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4,
+            }}>
+              {result.fallback_reason && !result.demo_mode
+                ? <AlertTriangle size={11} />
+                : <CheckCircle size={11} />}
+              {provenance.label}
+            </span>
+          )}
+
           {/* Structured findings */}
           <div>
             <h3 className="type-eyebrow" style={{ marginBottom: 8, color: 'var(--color-ink-muted)' }}>
@@ -598,14 +656,9 @@ function DictationPanel({ result, loading, onSubmit }) {
 
           {/* Editable draft */}
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <h3 className="type-eyebrow" style={{ color: 'var(--color-ink-muted)', margin: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Edit3 size={13} /> Editable Draft Report
-              </h3>
-              <span className="type-caption" style={{ color: 'var(--color-fin-orange)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Shield size={11} /> Review before use
-              </span>
-            </div>
+            <h3 className="type-eyebrow" style={{ color: 'var(--color-ink-muted)', margin: 0, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Edit3 size={13} /> Editable Draft Report
+            </h3>
             <textarea
               className="textarea-text type-mono"
               rows={12}
@@ -614,9 +667,6 @@ function DictationPanel({ result, loading, onSubmit }) {
               aria-label="Editable draft report"
               style={{ minHeight: 220, fontSize: 12, lineHeight: 1.7 }}
             />
-            <p className="type-caption" style={{ color: 'var(--color-ink-tertiary)', marginTop: 4 }}>
-              This draft was AI-generated from your dictation and is editable. It must be reviewed and approved by a qualified radiologist before clinical use.
-            </p>
           </div>
         </div>
       )}
@@ -908,11 +958,6 @@ export default function App() {
         </div>
 
         <div style={{ flex: 1 }} />
-
-        <div className="type-caption" style={{ color: 'var(--color-ink-tertiary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Shield size={11} />
-          <span>POC — Not for clinical use</span>
-        </div>
       </nav>
 
       {/* Demo banner */}
@@ -920,7 +965,7 @@ export default function App() {
 
       {/* Backend error */}
       {backendError && (
-        <div style={{ background: '#fef2f2', borderBottom: '1px solid #fecaca', padding: '8px 24px', color: '#991b1b', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="backend-error-bar" style={{ background: '#fef2f2', borderBottom: '1px solid #fecaca', padding: '8px 24px', color: '#991b1b', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
           <AlertTriangle size={14} /> {backendError}
         </div>
       )}
@@ -1020,7 +1065,6 @@ export default function App() {
                 : <ReportDetail
                     report={activeReportFull || activeReport}
                     patient={selectedPatient}
-                    onFollowUpClick={() => document.getElementById('chat-input')?.focus()}
                   />
             )}
           </div>

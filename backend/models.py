@@ -66,6 +66,11 @@ class PatientSummary(BaseModel):
     dob: str
     gender: str
 
+class BillingCodes(BaseModel):
+    """Proposed (NOT verified) billing codes attached to a synthetic report."""
+    icd_10: Optional[str] = None
+    cdt_proposed: Optional[str] = None
+
 class ReportSummary(BaseModel):
     id: str
     patient_id: str
@@ -74,11 +79,21 @@ class ReportSummary(BaseModel):
     radiologist: str
     status: str
     impression: str
+    # Additive synthetic metadata (all optional — existing records stay valid)
+    tooth_number: Optional[str] = None
+    encounter_type: Optional[str] = None
+    procedure_date: Optional[str] = None
+    billing_codes: Optional[BillingCodes] = None
 
 class FindingItem(BaseModel):
     site: str
     observation: str
     severity: str
+    # Optional additive fields. Report findings may carry them; dictation
+    # findings (transient, clinician-dictated) typically omit them.
+    complication_detected: Optional[bool] = None
+    category: Optional[str] = None
+    resolution_plan: Optional[str] = None
 
 class ReportDetail(BaseModel):
     id: str
@@ -90,6 +105,11 @@ class ReportDetail(BaseModel):
     findings: list[FindingItem]
     impression: str
     draft_report: str
+    # Additive synthetic metadata (all optional)
+    tooth_number: Optional[str] = None
+    encounter_type: Optional[str] = None
+    procedure_date: Optional[str] = None
+    billing_codes: Optional[BillingCodes] = None
 
 class QueryResponse(BaseModel):
     intent: str
@@ -100,6 +120,10 @@ class QueryResponse(BaseModel):
     ambiguous: bool
     demo_mode: bool
     message: str
+    # Transparency / provenance (additive): None → interpretation came from
+    # the LLM (or demo heuristics); set → the LLM failed and deterministic
+    # fallback interpretation was used.
+    fallback_reason: Optional[str] = None
 
 class DictationResponse(BaseModel):
     findings: list[Any]
@@ -108,6 +132,10 @@ class DictationResponse(BaseModel):
     uncertainties: list[str]
     requires_review: bool
     demo_mode: bool
+    # Transparency / provenance (additive — review gate is never bypassed)
+    fallback_reason: Optional[str] = None   # None → AI-structured; set → deterministic fallback
+    metadata: dict[str, str] = {}           # header lines stripped before structuring
+    transcript: str = ""                    # original transcript, always echoed back
 
 class FollowUpResponse(BaseModel):
     answer: str
