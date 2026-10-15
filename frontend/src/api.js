@@ -11,7 +11,7 @@ async function apiFetch(path, options = {}) {
       const err = await res.json();
       detail = err.detail || detail;
     } catch {
-      // Non-JSON error body — keep the generic HTTP status detail
+      // Non-JSON error body; keep the generic HTTP status detail
     }
     throw new Error(detail);
   }
@@ -26,4 +26,5 @@ export const api = {
   query:        (body)    => apiFetch('/query',    { method: 'POST', body: JSON.stringify(body) }),
   dictation:    (body)    => apiFetch('/dictation',{ method: 'POST', body: JSON.stringify(body) }),
   followUp:     (body)    => apiFetch('/follow-up',{ method: 'POST', body: JSON.stringify(body) }),
+  saveReport:   (body)    => apiFetch('/reports',   { method: 'POST', body: JSON.stringify(body) }),
 };

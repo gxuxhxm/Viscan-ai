@@ -9,11 +9,35 @@
     "tooth_number": "26",
     "encounter_type": "initial",
     "procedure_date": "2025-11-10",
-    "billing_codes": {"icd_10": "K04.5", "cdt_proposed": "D0150"},
+    "billing_codes": {
+      "icd_10": "K04.5",
+      "cdt_proposed": "D0150"
+    },
     "findings": [
-      {"site": "Upper left quadrant", "observation": "Periapical radiolucency at 26 (upper left first molar)", "severity": "moderate", "complication_detected": true, "category": "Periapical pathology", "resolution_plan": "Endodontic evaluation and treatment of tooth 26"},
-      {"site": "Lower right quadrant", "observation": "Mild bone loss at 46 (lower right first molar)", "severity": "mild", "complication_detected": false, "category": "Periodontal", "resolution_plan": "Periodontal review and scaling"},
-      {"site": "Temporomandibular joint", "observation": "TMJ appears within normal limits bilaterally", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "No intervention required"}
+      {
+        "site": "Upper left quadrant",
+        "observation": "Periapical radiolucency at 26 (upper left first molar)",
+        "severity": "moderate",
+        "complication_detected": true,
+        "category": "Periapical pathology",
+        "resolution_plan": "Endodontic evaluation and treatment of tooth 26"
+      },
+      {
+        "site": "Lower right quadrant",
+        "observation": "Mild bone loss at 46 (lower right first molar)",
+        "severity": "mild",
+        "complication_detected": false,
+        "category": "Periodontal",
+        "resolution_plan": "Periodontal review and scaling"
+      },
+      {
+        "site": "Temporomandibular joint",
+        "observation": "TMJ appears within normal limits bilaterally",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "No intervention required"
+      }
     ],
     "impression": "Periapical pathology at 26 requiring endodontic evaluation. Mild crestal bone loss at 46 consistent with early periodontitis.",
     "draft_report": "ORTHOPANTOMOGRAM REPORT\n\nPatient: Priya Sharma | Date: 10 November 2025\n\nTECHNIQUE: Digital OPG obtained under standard conditions.\n\nFINDINGS:\n1. A well-defined periapical radiolucency of approximately 4mm is noted at the apex of tooth 26 (upper left first molar), suggestive of periapical periodontitis.\n2. Mild horizontal alveolar bone loss observed at the distal aspect of tooth 46, consistent with early chronic periodontitis.\n3. Temporomandibular joints appear symmetrical and within normal limits bilaterally.\n4. Remaining dentition and alveolar bone show no other significant abnormalities.\n\nIMPRESSION:\n- Periapical pathology at tooth 26: endodontic evaluation recommended.\n- Early periodontitis at tooth 46: periodontal review advised.\n\nREPORT BY: Dr. Anil Kapoor, MDS Oral Radiology"
@@ -28,10 +52,27 @@
     "tooth_number": "26",
     "encounter_type": "follow_up",
     "procedure_date": "2025-06-03",
-    "billing_codes": {"icd_10": "K04.5", "cdt_proposed": "D0274"},
+    "billing_codes": {
+      "icd_10": "K04.5",
+      "cdt_proposed": "D0274"
+    },
     "findings": [
-      {"site": "Upper left first molar (26)", "observation": "Early periapical changes at root apex", "severity": "mild", "complication_detected": false, "category": "Periapical pathology", "resolution_plan": "Vitality testing and six-month follow-up radiograph"},
-      {"site": "Pulp chamber", "observation": "Reduced pulp chamber size consistent with age", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "No intervention required"}
+      {
+        "site": "Upper left first molar (26)",
+        "observation": "Early periapical changes at root apex",
+        "severity": "mild",
+        "complication_detected": false,
+        "category": "Periapical pathology",
+        "resolution_plan": "Vitality testing and six-month follow-up radiograph"
+      },
+      {
+        "site": "Pulp chamber",
+        "observation": "Reduced pulp chamber size consistent with age",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "No intervention required"
+      }
     ],
     "impression": "Early periapical changes at 26. Monitoring recommended.",
     "draft_report": "PERIAPICAL RADIOGRAPH REPORT\n\nPatient: Priya Sharma | Date: 3 June 2025\n\nTECHNIQUE: Periapical radiograph of upper left quadrant using paralleling technique.\n\nFINDINGS:\n1. Subtle widening of periodontal ligament space at the apex of tooth 26. Early periapical change noted.\n2. Pulp chamber reduction consistent with physiological secondary dentine deposition.\n\nIMPRESSION:\nEarly periapical pathology at tooth 26. Clinical correlation and vitality testing recommended. Six-month follow-up radiograph advised.\n\nREPORT BY: Dr. Anil Kapoor, MDS Oral Radiology"
@@ -46,10 +87,27 @@
     "tooth_number": "38",
     "encounter_type": "initial",
     "procedure_date": "2025-10-01",
-    "billing_codes": {"icd_10": "K01.1", "cdt_proposed": "D0150"},
+    "billing_codes": {
+      "icd_10": "K01.1",
+      "cdt_proposed": "D0150"
+    },
     "findings": [
-      {"site": "Lower left quadrant", "observation": "Impacted 38 (lower left third molar) in mesioangular position", "severity": "moderate", "complication_detected": true, "category": "Impaction", "resolution_plan": "Surgical consultation for extraction of 38"},
-      {"site": "Upper right quadrant", "observation": "Root resorption at 17 (upper right second molar)", "severity": "mild", "complication_detected": true, "category": "Root resorption", "resolution_plan": "Monitor with periodic radiographs"}
+      {
+        "site": "Lower left quadrant",
+        "observation": "Impacted 38 (lower left third molar) in mesioangular position",
+        "severity": "moderate",
+        "complication_detected": true,
+        "category": "Impaction",
+        "resolution_plan": "Surgical consultation for extraction of 38"
+      },
+      {
+        "site": "Upper right quadrant",
+        "observation": "Root resorption at 17 (upper right second molar)",
+        "severity": "mild",
+        "complication_detected": true,
+        "category": "Root resorption",
+        "resolution_plan": "Monitor with periodic radiographs"
+      }
     ],
     "impression": "Mesioangular impaction of 38 with potential for pericoronitis. Root resorption at 17 noted.",
     "draft_report": "ORTHOPANTOMOGRAM REPORT\n\nPatient: Priyanka Sharma | Date: 1 October 2025\n\nTECHNIQUE: Digital OPG obtained under standard conditions.\n\nFINDINGS:\n1. Tooth 38 (lower left third molar) is impacted in mesioangular position with the crown at the level of the cemento-enamel junction of 37. Pericoronal follicle space appears within normal limits.\n2. Mild external root resorption noted at the distal root of tooth 17, extent approximately 1mm.\n3. Remaining dentition shows no significant periapical or crestal bone abnormalities.\n\nIMPRESSION:\n- Mesioangular impaction of 38: surgical consultation recommended.\n- External root resorption at 17: monitoring advised.\n\nREPORT BY: Dr. Meera Iyer, MDS Oral Radiology"
@@ -64,10 +122,27 @@
     "tooth_number": null,
     "encounter_type": "routine_recall",
     "procedure_date": "2025-04-15",
-    "billing_codes": {"icd_10": null, "cdt_proposed": "D0274"},
+    "billing_codes": {
+      "icd_10": null,
+      "cdt_proposed": "D0274"
+    },
     "findings": [
-      {"site": "Interproximal contacts upper and lower posterior", "observation": "No interproximal caries detected", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "Routine recall"},
-      {"site": "Alveolar bone level", "observation": "Crestal bone levels within normal range", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "Routine recall"}
+      {
+        "site": "Interproximal contacts upper and lower posterior",
+        "observation": "No interproximal caries detected",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "Routine recall"
+      },
+      {
+        "site": "Alveolar bone level",
+        "observation": "Crestal bone levels within normal range",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "Routine recall"
+      }
     ],
     "impression": "No significant findings on bitewing radiographs.",
     "draft_report": "BITEWING RADIOGRAPH REPORT\n\nPatient: Priyanka Sharma | Date: 15 April 2025\n\nTECHNIQUE: Bilateral bitewing radiographs obtained.\n\nFINDINGS:\n1. No interproximal caries detected at any contact area.\n2. Crestal alveolar bone levels appear within normal limits bilaterally.\n3. No calculus deposits or other significant findings noted.\n\nIMPRESSION:\nNo significant findings. Routine recall recommended.\n\nREPORT BY: Dr. Meera Iyer, MDS Oral Radiology"
@@ -82,11 +157,35 @@
     "tooth_number": null,
     "encounter_type": "initial",
     "procedure_date": "2025-09-20",
-    "billing_codes": {"icd_10": "K05.3", "cdt_proposed": "D0150"},
+    "billing_codes": {
+      "icd_10": "K05.3",
+      "cdt_proposed": "D0150"
+    },
     "findings": [
-      {"site": "General alveolar bone", "observation": "Generalised moderate horizontal bone loss consistent with chronic periodontitis", "severity": "moderate", "complication_detected": true, "category": "Periodontal", "resolution_plan": "Full-mouth scaling and root planing; periodontic referral"},
-      {"site": "Lower anterior region", "observation": "Heavy calculus deposits visible on lower anteriors", "severity": "mild", "complication_detected": false, "category": "Periodontal", "resolution_plan": "Scaling during periodontal therapy"},
-      {"site": "48 (lower right third molar)", "observation": "48 fully erupted, appears normal", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "No intervention required"}
+      {
+        "site": "General alveolar bone",
+        "observation": "Generalised moderate horizontal bone loss consistent with chronic periodontitis",
+        "severity": "moderate",
+        "complication_detected": true,
+        "category": "Periodontal",
+        "resolution_plan": "Full-mouth scaling and root planing; periodontic referral"
+      },
+      {
+        "site": "Lower anterior region",
+        "observation": "Heavy calculus deposits visible on lower anteriors",
+        "severity": "mild",
+        "complication_detected": false,
+        "category": "Periodontal",
+        "resolution_plan": "Scaling during periodontal therapy"
+      },
+      {
+        "site": "48 (lower right third molar)",
+        "observation": "48 fully erupted, appears normal",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "No intervention required"
+      }
     ],
     "impression": "Generalised moderate chronic periodontitis. Periodontal treatment required.",
     "draft_report": "ORTHOPANTOMOGRAM REPORT\n\nPatient: Arjun Mehta | Date: 20 September 2025\n\nTECHNIQUE: Digital OPG obtained under standard conditions.\n\nFINDINGS:\n1. Generalised horizontal alveolar bone loss noted, approximately 30-40% bone loss across the dentition, consistent with moderate chronic periodontitis.\n2. Dense calculus deposits visible on the lingual aspect of lower anterior teeth.\n3. All third molars erupted and appear within normal limits.\n4. No periapical pathology detected.\n\nIMPRESSION:\nGeneralised moderate chronic periodontitis. Full-mouth periodontal therapy (scaling and root planing) advised. Periodontic referral recommended.\n\nREPORT BY: Dr. Anil Kapoor, MDS Oral Radiology"
@@ -101,10 +200,27 @@
     "tooth_number": "26",
     "encounter_type": "pre_surgical",
     "procedure_date": "2025-07-11",
-    "billing_codes": {"icd_10": "J32.0", "cdt_proposed": "D0170"},
+    "billing_codes": {
+      "icd_10": "J32.0",
+      "cdt_proposed": "D0170"
+    },
     "findings": [
-      {"site": "Maxillary sinus (bilateral)", "observation": "Mild mucosal thickening in right maxillary sinus", "severity": "mild", "complication_detected": true, "category": "Sinus pathology", "resolution_plan": "ENT review prior to implant surgery"},
-      {"site": "Alveolar ridge (upper left)", "observation": "Adequate bone volume for implant placement at 26 site", "severity": "none", "complication_detected": false, "category": "Implant planning", "resolution_plan": "Proceed with implant planning at 26"}
+      {
+        "site": "Maxillary sinus (bilateral)",
+        "observation": "Mild mucosal thickening in right maxillary sinus",
+        "severity": "mild",
+        "complication_detected": true,
+        "category": "Sinus pathology",
+        "resolution_plan": "ENT review prior to implant surgery"
+      },
+      {
+        "site": "Alveolar ridge (upper left)",
+        "observation": "Adequate bone volume for implant placement at 26 site",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Implant planning",
+        "resolution_plan": "Proceed with implant planning at 26"
+      }
     ],
     "impression": "Mild right maxillary sinusitis. Adequate bone at 26 site for implant. ENT review for sinus.",
     "draft_report": "CONE BEAM CT REPORT\n\nPatient: Arjun Mehta | Date: 11 July 2025\n\nTECHNIQUE: CBCT of maxillofacial region performed (FOV 13x15cm, voxel size 0.3mm).\n\nFINDINGS:\n1. Alveolar bone at the proposed implant site (26 region): height approximately 14mm, width 7mm. Bone density appears adequate (Hounsfield estimate: Class II-III).\n2. Right maxillary sinus shows uniform mucosal thickening of 3-4mm along the floor, consistent with mild sinusitis. No polyps or fluid level.\n3. Left maxillary sinus is clear.\n4. Inferior alveolar nerve canal bilaterally is well delineated; no proximity concerns.\n\nIMPRESSION:\n- Adequate bone volume at proposed 26 implant site. Proceed with implant planning.\n- Right maxillary sinusitis: ENT review prior to implant surgery recommended.\n\nREPORT BY: Dr. Meera Iyer, MDS Oral Radiology"
@@ -119,14 +235,38 @@
     "tooth_number": null,
     "encounter_type": "initial",
     "procedure_date": "2025-12-05",
-    "billing_codes": {"icd_10": null, "cdt_proposed": "D0150"},
+    "billing_codes": {
+      "icd_10": null,
+      "cdt_proposed": "D0150"
+    },
     "findings": [
-      {"site": "Upper anterior teeth", "observation": "Crowding with mesial drift of upper anterior segment", "severity": "mild", "complication_detected": false, "category": "Orthodontic", "resolution_plan": "Orthodontic assessment"},
-      {"site": "Third molars", "observation": "All four third molars unerupted; 18 and 28 in dentigerous position; 38 and 48 incompletely formed", "severity": "mild", "complication_detected": false, "category": "Developmental", "resolution_plan": "Monitor third molar development"},
-      {"site": "Dentition overall", "observation": "Mixed dentition with all permanent teeth present except third molars; developing normally", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "No intervention required"}
+      {
+        "site": "Upper anterior teeth",
+        "observation": "Crowding with mesial drift of upper anterior segment",
+        "severity": "mild",
+        "complication_detected": false,
+        "category": "Orthodontic",
+        "resolution_plan": "Orthodontic assessment"
+      },
+      {
+        "site": "Third molars",
+        "observation": "All four third molars unerupted; 18 and 28 in dentigerous position; 38 and 48 incompletely formed",
+        "severity": "mild",
+        "complication_detected": false,
+        "category": "Developmental",
+        "resolution_plan": "Monitor third molar development"
+      },
+      {
+        "site": "Dentition overall",
+        "observation": "Mixed dentition with all permanent teeth present except third molars; developing normally",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "No intervention required"
+      }
     ],
     "impression": "Developing dentition within expected parameters for age. Mild crowding in upper anterior. Orthodontic assessment advised.",
-    "draft_report": "ORTHOPANTOMOGRAM REPORT\n\nPatient: Sana Khan | Date: 5 December 2025\n\nTECHNIQUE: Digital OPG obtained under standard conditions.\n\nFINDINGS:\n1. Permanent dentition fully erupted except third molars. Third molar buds visible bilaterally with incomplete root formation.\n2. Mild crowding observed in the upper anterior segment with slight mesial tipping of 12 and 22.\n3. Alveolar bone levels and periapical regions appear normal throughout.\n4. No caries, pathology, or significant developmental anomaly detected.\n\nIMPRESSION:\nHealthy dentition for age. Mild upper anterior crowding—orthodontic consultation recommended.\n\nREPORT BY: Dr. Anil Kapoor, MDS Oral Radiology"
+    "draft_report": "ORTHOPANTOMOGRAM REPORT\n\nPatient: Sana Khan | Date: 5 December 2025\n\nTECHNIQUE: Digital OPG obtained under standard conditions.\n\nFINDINGS:\n1. Permanent dentition fully erupted except third molars. Third molar buds visible bilaterally with incomplete root formation.\n2. Mild crowding observed in the upper anterior segment with slight mesial tipping of 12 and 22.\n3. Alveolar bone levels and periapical regions appear normal throughout.\n4. No caries, pathology, or significant developmental anomaly detected.\n\nIMPRESSION:\nHealthy dentition for age. Mild upper anterior crowding; orthodontic consultation recommended.\n\nREPORT BY: Dr. Anil Kapoor, MDS Oral Radiology"
   },
   {
     "id": "R008",
@@ -138,10 +278,27 @@
     "tooth_number": "16",
     "encounter_type": "follow_up",
     "procedure_date": "2025-08-18",
-    "billing_codes": {"icd_10": null, "cdt_proposed": "D0274"},
+    "billing_codes": {
+      "icd_10": null,
+      "cdt_proposed": "D0274"
+    },
     "findings": [
-      {"site": "Upper right first molar (16)", "observation": "Deep restoration present; pulp chamber appears vital with no periapical changes", "severity": "none", "complication_detected": false, "category": "Restorative", "resolution_plan": "Annual radiographic monitoring"},
-      {"site": "Adjacent alveolar bone", "observation": "Crestal bone normal", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "No intervention required"}
+      {
+        "site": "Upper right first molar (16)",
+        "observation": "Deep restoration present; pulp chamber appears vital with no periapical changes",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Restorative",
+        "resolution_plan": "Annual radiographic monitoring"
+      },
+      {
+        "site": "Adjacent alveolar bone",
+        "observation": "Crestal bone normal",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "No intervention required"
+      }
     ],
     "impression": "No periapical pathology at 16. Deep restoration monitoring advised.",
     "draft_report": "PERIAPICAL RADIOGRAPH REPORT\n\nPatient: Sana Khan | Date: 18 August 2025\n\nTECHNIQUE: Periapical radiograph of upper right quadrant.\n\nFINDINGS:\n1. Deep occlusal restoration in tooth 16. Pulp chamber is not encroached upon and retains a normal contour.\n2. Periapical region at 16 shows normal trabecular bone pattern. No radiolucency detected.\n3. Crestal alveolar bone levels are within normal limits.\n\nIMPRESSION:\nDeep restoration at 16 without current periapical pathology. Annual radiographic monitoring recommended to detect any future pulp response changes.\n\nREPORT BY: Dr. Meera Iyer, MDS Oral Radiology"
@@ -156,11 +313,35 @@
     "tooth_number": "25",
     "encounter_type": "emergency",
     "procedure_date": "2025-10-28",
-    "billing_codes": {"icd_10": "K04.0", "cdt_proposed": "D0150"},
+    "billing_codes": {
+      "icd_10": "K04.0",
+      "cdt_proposed": "D0150"
+    },
     "findings": [
-      {"site": "Upper left second premolar (25)", "observation": "Periapical abscess with associated bone destruction, approximately 8mm radiolucency", "severity": "severe", "complication_detected": true, "category": "Periapical pathology", "resolution_plan": "Urgent endodontic or surgical intervention at 25"},
-      {"site": "Lower left posterior region", "observation": "Edentulous region at 36, 37 site with bone atrophy", "severity": "moderate", "complication_detected": true, "category": "Ridge atrophy", "resolution_plan": "Bone augmentation assessment prior to implant"},
-      {"site": "Remaining dentition", "observation": "Multiple restorations present; no additional periapical pathology", "severity": "none", "complication_detected": false, "category": "Restorative", "resolution_plan": "No additional intervention"}
+      {
+        "site": "Upper left second premolar (25)",
+        "observation": "Periapical abscess with associated bone destruction, approximately 8mm radiolucency",
+        "severity": "severe",
+        "complication_detected": true,
+        "category": "Periapical pathology",
+        "resolution_plan": "Urgent endodontic or surgical intervention at 25"
+      },
+      {
+        "site": "Lower left posterior region",
+        "observation": "Edentulous region at 36, 37 site with bone atrophy",
+        "severity": "moderate",
+        "complication_detected": true,
+        "category": "Ridge atrophy",
+        "resolution_plan": "Bone augmentation assessment prior to implant"
+      },
+      {
+        "site": "Remaining dentition",
+        "observation": "Multiple restorations present; no additional periapical pathology",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Restorative",
+        "resolution_plan": "No additional intervention"
+      }
     ],
     "impression": "Periapical abscess at 25 requiring urgent endodontic or surgical intervention. Bone atrophy in lower left edentulous region.",
     "draft_report": "ORTHOPANTOMOGRAM REPORT\n\nPatient: Rohan Verma | Date: 28 October 2025\n\nTECHNIQUE: Digital OPG obtained under standard conditions.\n\nFINDINGS:\n1. A large periapical radiolucency of approximately 8mm diameter is noted at the apex of tooth 25 (upper left second premolar), with cortical plate erosion suggestive of periapical abscess.\n2. Edentulous region corresponding to teeth 36 and 37. Significant vertical bone atrophy noted (ridge height approximately 8mm above the inferior alveolar canal).\n3. Multiple composite and amalgam restorations noted. No further periapical pathology.\n4. Mild generalised calculus deposits on lower anteriors.\n\nIMPRESSION:\n1. Periapical abscess at 25 - urgent endodontic or surgical consultation required.\n2. Moderate ridge atrophy at 36-37 site - bone augmentation may be required prior to implant rehabilitation.\n\nREPORT BY: Dr. Anil Kapoor, MDS Oral Radiology"
@@ -175,12 +356,149 @@
     "tooth_number": "15",
     "encounter_type": "follow_up",
     "procedure_date": "2025-03-07",
-    "billing_codes": {"icd_10": "K02.9", "cdt_proposed": "D0274"},
+    "billing_codes": {
+      "icd_10": "K02.9",
+      "cdt_proposed": "D0274"
+    },
     "findings": [
-      {"site": "Upper right posterior interproximal", "observation": "Secondary caries under restoration at 15", "severity": "moderate", "complication_detected": true, "category": "Caries", "resolution_plan": "Replace restoration; assess pulp proximity clinically"},
-      {"site": "Lower right posterior", "observation": "No significant findings", "severity": "none", "complication_detected": false, "category": "Normal variant", "resolution_plan": "No intervention required"}
+      {
+        "site": "Upper right posterior interproximal",
+        "observation": "Secondary caries under restoration at 15",
+        "severity": "moderate",
+        "complication_detected": true,
+        "category": "Caries",
+        "resolution_plan": "Replace restoration; assess pulp proximity clinically"
+      },
+      {
+        "site": "Lower right posterior",
+        "observation": "No significant findings",
+        "severity": "none",
+        "complication_detected": false,
+        "category": "Normal variant",
+        "resolution_plan": "No intervention required"
+      }
     ],
     "impression": "Secondary caries at 15 under existing restoration. Replacement of restoration advised.",
     "draft_report": "BITEWING RADIOGRAPH REPORT\n\nPatient: Rohan Verma | Date: 7 March 2025\n\nTECHNIQUE: Bilateral bitewing radiographs obtained.\n\nFINDINGS:\n1. Secondary caries detected at the proximal margins of the existing restoration on tooth 15 (upper right second premolar). Depth approaches dentine-pulp junction.\n2. Right lower posterior region shows no interproximal caries. Crestal bone levels within normal limits.\n\nIMPRESSION:\nSecondary caries at 15 requiring restoration replacement. Pulp proximity should be assessed clinically before proceeding.\n\nREPORT BY: Dr. Meera Iyer, MDS Oral Radiology"
+  },
+  {
+    "id": "R011",
+    "patient_id": "P006",
+    "type": "OPG",
+    "date": "2026-10-15",
+    "radiologist": "Unassigned",
+    "status": "final",
+    "tooth_number": null,
+    "encounter_type": null,
+    "procedure_date": null,
+    "billing_codes": null,
+    "findings": [
+      {
+        "site": "Tooth 36 (lower left first molar)",
+        "observation": "Radiolucent area visible near the apex",
+        "severity": "moderate",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "current"
+      },
+      {
+        "site": "Tooth 46 (lower right first molar)",
+        "observation": "Mild horizontal alveolar bone loss observed around the tooth",
+        "severity": "mild",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "current"
+      },
+      {
+        "site": "Mandibular condyles",
+        "observation": "Mandibular condyles appear symmetrical on both sides",
+        "severity": "none",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "current"
+      }
+    ],
+    "impression": "Radiolucent area visible near the apex Mild horizontal alveolar bone loss observed around the tooth Mandibular condyles appear symmetrical on both sides",
+    "draft_report": "CLINICAL DICTATION DRAFT\n\nPatient Name: Kavya Reddy\nPatient ID: VSC-5001\nDate of Birth: March 12, 1998\nExamination Date: October 15, 2026\nExamination: Orthopantomogram\n\nFINDINGS:\n\nHISTORICAL FINDINGS:\n- None provided in dictation.\n\nCURRENT OBSERVATIONS:\n- Tooth 36 (lower left first molar): Radiolucent area visible near the apex.\n- Tooth 46 (lower right first molar): Mild horizontal alveolar bone loss observed.\n- Mandibular condyles: Symmetrical appearance on both sides.",
+    "clinician_confirmed": true,
+    "source_transcript": "We have a new patient, Kavya Reddy, a 28-year-old female, patient ID VSC-5001. Her date of birth is March 12, 1998. The examination date is October 15, 2026.\n\nAn orthopantomogram has been obtained for evaluation of the teeth and surrounding jaw structures. A radiolucent area is visible near the apex of tooth 36, the lower left first molar. Mild horizontal alveolar bone loss is observed around tooth 46, the lower right first molar. The mandibular condyles appear symmetrical on both sides.\n\nPlease generate a structured OPG report with patient details, radiographic findings, anatomical sites, and an impression. Preserve the dictated findings accurately and do not invent measurements or additional abnormalities. The report requires clinician review.",
+    "provenance": {
+      "source": "dictation",
+      "demo_mode": false,
+      "fallback_reason": null,
+      "metadata": {}
+    }
+  },
+  {
+    "id": "R012",
+    "patient_id": "P002",
+    "type": "OPG",
+    "date": "2026-10-15",
+    "radiologist": "Unassigned",
+    "status": "final",
+    "tooth_number": null,
+    "encounter_type": null,
+    "procedure_date": null,
+    "billing_codes": null,
+    "findings": [
+      {
+        "site": "Tooth 38",
+        "observation": "Mesioangular impaction documented on previous OPG dated October 1, 2025.",
+        "severity": "none",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "historical"
+      },
+      {
+        "site": "Tooth 17",
+        "observation": "Root resorption documented on previous OPG dated October 1, 2025.",
+        "severity": "none",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "historical"
+      },
+      {
+        "site": "Tooth 38",
+        "observation": "Tooth 38 remains in a mesioangular impacted position.",
+        "severity": "none",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "current"
+      },
+      {
+        "site": "Tooth 17",
+        "observation": "Root resorption is visible at tooth 17.",
+        "severity": "none",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "current"
+      },
+      {
+        "site": "General",
+        "observation": "No additional observations are available for this dictation.",
+        "severity": "none",
+        "complication_detected": null,
+        "category": null,
+        "resolution_plan": null,
+        "context": "current"
+      }
+    ],
+    "impression": "Mesioangular impaction documented on previous OPG dated October 1, 2025. Root resorption documented on previous OPG dated October 1, 2025. Tooth 38 remains in a mesioangular impacted position. Root resorption is visible at tooth 17. No additional observations are available for this dictation.",
+    "draft_report": "CLINICAL DICTATION DRAFT\n\nPatient Name: Priyanka Sharma\nPatient ID: P002\nDate of Birth: July 22, 1992\nExamination: Follow-up OPG\nDate of Examination: October 15, 2026\n\nFINDINGS:\n\nHISTORICAL FINDINGS (Prior OPG dated October 1, 2025):\n- Tooth 38: Mesioangular impaction.\n- Tooth 17: Root resorption.\n\nCURRENT OBSERVATIONS (OPG dated October 15, 2026):\n- Tooth 38: Remains in a mesioangular impacted position.\n- Tooth 17: Root resorption is visible.\n- General: No additional observations are available for this dictation.",
+    "clinician_confirmed": true,
+    "source_transcript": "We have an existing patient, Priyanka Sharma, patient ID P002, date of birth July 22, 1992. This is a follow-up OPG examination dated October 15, 2026.\n\nThe previous OPG dated October 1, 2025, documented a mesioangular impaction of tooth 38, the lower left third molar, and root resorption at tooth 17, the upper right second molar.\n\nOn the current OPG, tooth 38 remains in a mesioangular impacted position. Root resorption is visible at tooth 17. No additional observations are available for this dictation.\n\nPlease prepare a structured follow-up OPG report. Separate historical findings from current observations. Do not claim progression, improvement, or stability without sufficient comparative evidence. Do not add unmentioned findings or measurements. The report requires clinician review.",
+    "provenance": {
+      "source": "dictation",
+      "demo_mode": false,
+      "fallback_reason": null,
+      "metadata": {}
+    }
   }
 ]

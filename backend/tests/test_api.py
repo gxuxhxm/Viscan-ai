@@ -11,7 +11,7 @@ from pathlib import Path
 # Ensure backend is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Force demo mode for all tests — never make paid API calls
+# Force demo mode for all tests, never make paid API calls
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["GEMINI_API_KEY"] = ""
 
@@ -44,25 +44,16 @@ def test_retrieve_specific_report_by_id():
 
 
 def test_retrieve_report_full_name_resolves():
-    """Querying 'Priya Sharma' returns a retrieve_report intent.
-    Because the DB has 'Priyanka Sharma' too, the system may surface ambiguity
-    for patient safety — but must not silently pick the wrong patient."""
+    """Querying 'Priya Sharma' returns a retrieve_report intent and resolves to
+    that exact patient, so 'Priyanka Sharma' never escalates it to ambiguity."""
     resp = client.post("/query", json={"text": "Open Priya Sharma's latest OPG report"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["intent"] == "retrieve_report"
-    # Either: unambiguous match to P001, OR: correct ambiguity surfaced
-    if data["ambiguous"]:
-        # Safety: both Sharmas should be candidates
-        names = [p["name"] for p in data["matched_patients"]]
-        assert any("Priya" in n for n in names)
-        # No report should be returned when ambiguous
-        assert data["report"] is None
-    else:
-        # If unambiguous, it must be the correct patient
-        assert data["report"] is not None
-        assert data["report"]["patient_id"] == "P001"
-        assert data["report"]["type"] == "OPG"
+    assert data["ambiguous"] is False
+    assert data["report"] is not None
+    assert data["report"]["patient_id"] == "P001"
+    assert data["report"]["type"] == "OPG"
 
 
 def test_exact_full_name_resolves_unambiguously():
@@ -78,17 +69,52 @@ def test_exact_full_name_resolves_unambiguously():
     assert [p["id"] for p in data["matched_patients"]] == ["P001"]
 
 
-def test_partial_name_query_is_ambiguous():
-    """A partial first name matching two patients must ask for clarification
-    and must not return a report — including fully-lowercase input."""
-    resp = client.post("/query", json={"text": "open priya's opg"})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["intent"] == "retrieve_report"
-    assert data["ambiguous"] is True
-    assert data["report"] is None
-    ids = [p["id"] for p in data["matched_patients"]]
-    assert "P001" in ids and "P002" in ids
+def test_exact_first_name_resolves_to_priya_sharma():
+    """Regression: 'Priya' is an exact first name for P001 and only a prefix of
+    'Priyanka', so every phrasing of it must resolve to Priya Sharma, never
+    surface Priyanka Sharma as a competing candidate."""
+    for text in ("Priya", "Priya's report", "Open Priya's latest OPG report",
+                 "open priya", "open priya's opg"):
+        data = client.post("/query", json={"text": text}).json()
+        assert data["intent"] == "retrieve_report", text
+        assert data["ambiguous"] is False, text
+        assert data["report"] is not None, text
+        assert data["report"]["patient_id"] == "P001", text
+        assert [p["id"] for p in data["matched_patients"]] == ["P001"], text
+        assert all("Priyanka" not in p["name"] for p in data["matched_patients"]), text
+
+
+def test_priyanka_query_resolves_to_priyanka_sharma():
+    """A Priyanka-only query resolves to P002 (never P001): exact first name
+    wins even though her name also starts with 'Priya'."""
+    for text in ("Priyanka", "Priyanka's report", "open priyanka's latest opg report"):
+        data = client.post("/query", json={"text": text}).json()
+        assert data["intent"] == "retrieve_report", text
+        assert data["ambiguous"] is False, text
+        assert data["report"] is not None, text
+        assert data["report"]["patient_id"] == "P002", text
+        assert [p["id"] for p in data["matched_patients"]] == ["P002"], text
+
+
+def test_gemini_extracted_first_name_resolves(monkeypatch):
+    """The AI-extracted name is the search intent: whatever Gemini extracts as
+    'Priya' is resolved against the database (exact first name) instead of
+    being re-interpreted by the fuzzy scorer."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({
+            "intent": "retrieve_report",
+            "patient_name": "Priya",
+            "report_type": "OPG",
+        }),
+    )
+    data = client.post("/query", json={"text": "open priya's latest opg report"}).json()
+    assert data["patient_name"] == "Priya"
+    assert data["ambiguous"] is False
+    assert data["report"] is not None
+    assert data["report"]["patient_id"] == "P001"
+    assert [p["id"] for p in data["matched_patients"]] == ["P001"]
 
 
 def test_retrieve_report_rohan_bitewing():
@@ -114,19 +140,47 @@ def test_retrieve_report_nonexistent_patient():
 
 # ── Test 2: Ambiguous patient identity ──────────────────────────────────────
 
-def test_ambiguous_patient_priya():
-    """'Priya' alone must surface both Priya Sharma and Priyanka Sharma as candidates."""
+def test_priya_resolves_despite_similar_priyanka():
+    """Regression: 'Priya' must resolve to Priya Sharma, since no other patient has
+    the exact first name Priya, so no choice is asked for."""
     resp = client.post("/query", json={"text": "Open Priya's OPG report"})
     assert resp.status_code == 200
     data = resp.json()
-    # Must be ambiguous — Priya matches both
+    assert data["intent"] == "retrieve_report"
+    assert data["ambiguous"] is False
+    assert [p["id"] for p in data["matched_patients"]] == ["P001"]
+    assert data["report"] is not None
+    assert data["report"]["patient_id"] == "P001"
+    assert data["report"]["type"] == "OPG"
+
+
+def test_shared_last_name_is_genuine_ambiguity():
+    """"Sharma" matches two patients at the SAME priority (exact last name) →
+    the user is asked to choose and no report is silently picked."""
+    resp = client.post("/query", json={"text": "Open Sharma's OPG"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "retrieve_report"
     assert data["ambiguous"] is True
-    assert len(data["matched_patients"]) >= 2
-    names = [p["name"] for p in data["matched_patients"]]
-    assert any("Priya Sharma" in n for n in names)
-    assert any("Priyanka" in n for n in names)
-    # Must NOT silently return a report for one of them
     assert data["report"] is None
+    ids = [p["id"] for p in data["matched_patients"]]
+    assert ids[:2] == ["P001", "P002"]
+    assert "select the correct patient" in data["message"].lower()
+
+
+def test_two_patients_sharing_a_first_name_asks_the_user(monkeypatch):
+    """Genuine ambiguity: when two patients share the exact same first name,
+    neither wins, so the user must choose."""
+    from services import retrieval
+
+    monkeypatch.setattr(retrieval, "_load_patients", lambda: [
+        {"id": "P101", "name": "Priya Sharma", "dob": "1990-01-01", "gender": "F"},
+        {"id": "P102", "name": "Priya Singh", "dob": "1991-02-02", "gender": "F"},
+    ])
+    data = client.post("/query", json={"text": "open Priya's OPG report"}).json()
+    assert data["ambiguous"] is True
+    assert data["report"] is None
+    assert [p["id"] for p in data["matched_patients"]] == ["P101", "P102"]
 
 
 def test_ambiguous_explicit_sharma():
@@ -141,11 +195,11 @@ def test_ambiguous_explicit_sharma():
 
 def test_no_silent_wrong_patient_selection():
     """When ambiguous, report must be None (no silent selection)."""
-    resp = client.post("/query", json={"text": "Open Priya's reports"})
+    resp = client.post("/query", json={"text": "Open Sharma's reports"})
     assert resp.status_code == 200
     data = resp.json()
-    if data["ambiguous"]:
-        assert data["report"] is None
+    assert data["ambiguous"] is True
+    assert data["report"] is None
 
 
 # ── Test 3: Unsupported clinical claims in dictation ────────────────────────
@@ -160,10 +214,13 @@ def test_dictation_does_not_invent_findings():
     assert data["requires_review"] is True
     # Draft report must not contain fabricated diagnoses
     draft = data["draft_report"].lower()
-    # The word "abscess" was not in the transcript — should not appear
+    # The word "abscess" was not in the transcript, so it should not appear
     assert "abscess" not in draft
     # Uncertainties must exist in demo mode
     assert isinstance(data["uncertainties"], list)
+    # A genuine clinical transcript is still structured into a draft
+    assert data["usable"] is True
+    assert data["draft_report"].strip()
 
 
 def test_dictation_requires_review_always():
@@ -177,6 +234,23 @@ def test_dictation_empty_transcript_rejected():
     """Empty transcript must be rejected with a 422."""
     resp = client.post("/dictation", json={"transcript": "   "})
     assert resp.status_code == 422
+
+
+def test_dictation_useless_input_gets_no_draft_and_no_save():
+    """Reported bug: noise such as 'what the dark report for 2:36@' used to be
+    structured into an editable draft that could be saved. It must now come
+    back unusable: no findings, no draft, so nothing can be filed."""
+    resp = client.post("/dictation", json={"transcript": "what the dark report for 2:36@"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["usable"] is False
+    assert data["findings"] == []
+    assert data["draft_report"] == ""
+    assert data["requires_review"] is True
+    assert data["fallback_reason"]            # reason surfaced for the UI chip
+    assert any("clinical" in u.lower() for u in data["uncertainties"])
+    # The transcript itself is still echoed, so the clinician can retry
+    assert data["transcript"] == "what the dark report for 2:36@"
 
 
 # ── Test 4: API health & demo mode ──────────────────────────────────────────
@@ -258,11 +332,11 @@ def test_follow_up_stale_session_report():
 
 
 def test_list_patients():
-    """Patient list must include all 5 synthetic patients."""
+    """Patient list must include every synthetic patient."""
     resp = client.get("/patients")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 5
+    assert len(data) == 6
     names = [p["name"] for p in data]
     assert "Priya Sharma" in names
     assert "Priyanka Sharma" in names
@@ -274,6 +348,15 @@ def test_patient_reports_list():
         resp = client.get(f"/patients/{pid}/reports")
         assert resp.status_code == 200
         assert len(resp.json()) >= 2
+
+
+def test_patient_summary_report_count():
+    """Patient summaries must carry their on-file report count for the sidebar."""
+    data = client.get("/patients").json()
+    assert len(data) == 6
+    for patient in data:
+        listed = client.get(f"/patients/{patient['id']}/reports").json()
+        assert patient["report_count"] == len(listed)
 
 
 # ── Additive report schema (tooth / encounter / proposed billing) ───────────
@@ -335,6 +418,63 @@ def test_dictation_metadata_only_no_findings():
     assert data["fallback_reason"] is not None
     assert data["metadata"]["name"] == "Priya Sharma"
     assert data["requires_review"] is True
+    assert data["usable"] is False   # nothing clinical → no savable draft
+
+
+# Real follow-up OPG dictation: header-like opening line, prior-study findings,
+# and a current exam that explicitly reports NO new findings.
+_FOLLOWUP_OPG_TRANSCRIPT = (
+    "We have an existing patient, Arjun Mehta, patient ID P003, date of birth "
+    "November 8, 1975. The examination date is October 15, 2026.\n\n"
+    "This is a follow-up orthopantomogram for comparison with the patient's "
+    "previous OPG dated September 20, 2025, and CBCT dated July 11, 2025.\n\n"
+    "The previous OPG documented generalized moderate horizontal alveolar bone "
+    "loss consistent with chronic periodontitis, heavy calculus deposits in the "
+    "lower anterior region, and a fully erupted, apparently normal lower right "
+    "third molar, tooth 48.\n\n"
+    "The previous CBCT documented mild mucosal thickening in the right maxillary "
+    "sinus and adequate bone volume at the upper left first molar, tooth 26, "
+    "implant site.\n\n"
+    "Please generate a structured follow-up OPG report. Separate historical "
+    "findings from current observations. No new radiographic findings have been "
+    "provided, so do not claim that any condition has improved, worsened, or "
+    "remained unchanged. Do not invent measurements, diagnoses, or treatment "
+    "recommendations. Clearly indicate that current findings require radiographic "
+    "assessment and clinician review."
+)
+
+
+def test_followup_opg_dictation_is_structured_not_metadata_only(monkeypatch):
+    """Regression (reported bug): the follow-up OPG dictation must come back
+    structured. Even in the worst case (the model answering with an empty
+    findings list on BOTH attempts) the response must never claim the input
+    was 'only header/metadata lines' or show an empty findings panel."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service,
+        "_call_llm",
+        lambda *a, **k: json.dumps({
+            "findings": [],
+            "anatomical_site": "",
+            "draft_report": "CLINICAL DICTATION DRAFT",
+            "uncertainties": [],
+            "requires_review": True,
+        }),
+    )
+
+    resp = client.post("/dictation", json={"transcript": _FOLLOWUP_OPG_TRANSCRIPT})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # The narrative survived the metadata split and reached the structurer
+    assert "chronic periodontitis" in json.dumps(data["findings"]).lower()
+    assert data["anatomical_site"] != "No clinical findings detected"
+    uncertainties = " ".join(data["uncertainties"]).lower()
+    assert "only header/metadata lines provided" not in uncertainties
+    assert "header/metadata" not in (data["fallback_reason"] or "").lower()
+    assert data["requires_review"] is True
+    assert "CLINICAL DICTATION DRAFT" in data["draft_report"]
+    assert data["transcript"].startswith("We have an existing patient, Arjun Mehta")
 
 
 # ── Conversational intents: greetings, assistant identity, unsupported ───────
@@ -366,14 +506,13 @@ def test_greeting_with_task_is_not_a_greeting():
 
 
 def test_identity_question_answered_truthfully():
-    """"Are you Gemini?" → honest answer: the app USES the Gemini API for its AI
-    tasks; it never claims the whole app IS Gemini."""
+    """"Are you Gemini?" → the reply describes Viscan AI and its capabilities,
+    and never names the underlying AI provider."""
     data = client.post("/query", json={"text": "Are you Gemini?"}).json()
     assert data["intent"] == "assistant_identity"
     msg = data["message"].lower()
-    assert "gemini api" in msg      # names what powers the app's AI tasks
-    assert "not gemini" in msg      # never claims to BE Gemini
     assert "viscan" in msg
+    assert "gemini" not in msg      # never names the underlying provider
     assert data["report"] is None
 
 
@@ -394,7 +533,7 @@ def test_unsupported_request_gets_guidance():
 
 def test_rahul_report_unknown_patient():
     """"Rahul report" is interpreted as retrieval, searched against the mock
-    patient data, and answered with a clear 'no such patient' message — a
+    patient data, and answered with a clear 'no such patient' message, a
     patient is never invented."""
     data = client.post("/query", json={"text": "Rahul report"}).json()
     assert data["intent"] == "retrieve_report"
@@ -449,7 +588,7 @@ def _force_live_mode(monkeypatch):
 def test_greeting_classified_by_gemini_not_hardcoded(monkeypatch):
     """Natural greeting phrasing the deterministic parser would NOT match
     ("well hello there, how are things going today?") is classified as a
-    greeting because Gemini said so — and the chat request really hit the LLM."""
+    greeting because Gemini said so, and the chat request really hit the LLM."""
     llm_service = _force_live_mode(monkeypatch)
     seen = {}
 
@@ -474,10 +613,9 @@ def test_identity_question_classified_by_gemini(monkeypatch):
         llm_service, "_call_llm",
         lambda *a, **k: json.dumps({"intent": "assistant_identity"}),
     )
-    data = client.post("/query", json={"text": "just curious — which model am i talking to?"}).json()
+    data = client.post("/query", json={"text": "just curious, which model am i talking to?"}).json()
     assert data["intent"] == "assistant_identity"
-    assert "gemini api" in data["message"].lower()
-    assert "not gemini" in data["message"].lower()
+    assert "gemini" not in data["message"].lower()
 
 
 def test_natural_report_request_interpreted_by_gemini(monkeypatch):
@@ -516,7 +654,7 @@ def test_contextual_summary_classified_by_gemini(monkeypatch):
 
 
 def test_gemini_failure_gives_clear_fallback_message(monkeypatch):
-    """When Gemini fails, the user sees a clear outage message — not 'you typed
+    """When Gemini fails, the user sees a clear outage message, not 'you typed
     an unrecognised report command' wording."""
     llm_service = _force_live_mode(monkeypatch)
 
@@ -555,3 +693,59 @@ def test_gemini_failure_still_answers_greeting(monkeypatch):
     data = client.post("/query", json={"text": "hi"}).json()
     assert data["intent"] == "greeting"
     assert "Hi!" in data["message"]
+
+
+# ── Patient info (contact / demographic lookup) ─────────────────────────────
+
+def test_contact_details_of_open_report_patient():
+    """"Contact details of this person" with an open report resolves to that
+    report's patient and returns the real phone/email on file."""
+    resp = client.post("/query", json={
+        "text": "give me contact details of this person",
+        "session_context": {"active_report_id": "R001"},
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "patient_info"
+    assert "Priya Sharma" in data["message"]
+    assert "+91-98765-43210" in data["message"]
+    assert "priya.sharma@example.com" in data["message"]
+
+
+def test_contact_details_by_explicit_name():
+    """A named contact request resolves without needing an open report."""
+    resp = client.post("/query", json={"text": "what is Rohan Verma's phone number?"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["intent"] == "patient_info"
+    assert "+91-77700-33333" in data["message"]
+
+
+def test_contact_details_unknown_patient_never_invented():
+    """An unknown name must not yield fabricated contact info."""
+    resp = client.post("/query", json={"text": "contact details for ZZZ Nowhere"})
+    data = resp.json()
+    assert data["intent"] == "patient_info"
+    assert "@example.com" not in data["message"]
+
+
+def test_contact_details_no_context_no_name_guides_user():
+    """With no open report and no name, ask the user rather than guessing."""
+    resp = client.post("/query", json={"text": "give me the contact details"})
+    data = resp.json()
+    assert data["intent"] == "patient_info"
+    assert "open" in data["message"].lower()
+
+
+def test_contact_details_demo_mode_no_llm():
+    """Demo mode answers contact requests from real data with no LLM call."""
+    import services.llm_service as llm_service
+    _orig = llm_service.DEMO_MODE
+    llm_service.DEMO_MODE = True
+    try:
+        resp = client.post("/query", json={"text": "contact details for Priya Sharma"})
+    finally:
+        llm_service.DEMO_MODE = _orig
+    data = resp.json()
+    assert data["intent"] == "patient_info"
+    assert "priya.sharma@example.com" in data["message"]

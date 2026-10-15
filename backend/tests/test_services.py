@@ -8,7 +8,7 @@ import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-# Force demo mode for all tests — never make paid API calls
+# Force demo mode for all tests, never make paid API calls
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["GEMINI_API_KEY"] = ""
 
@@ -16,6 +16,7 @@ import json
 
 from services.retrieval import (
     search_patients_by_name,
+    resolve_patient_name,
     get_latest_report_for_patient,
     get_report_by_id,
     get_reports_for_patient,
@@ -36,10 +37,16 @@ def test_retrieval_exact_name():
 
 
 def test_retrieval_partial_name_ambiguous():
+    """The fuzzy candidate generator still returns BOTH similar names; which
+    one wins (or whether the user is asked) is decided by resolve_patient_name."""
     results = search_patients_by_name("Priya")
     ids = [r["id"] for r in results]
     assert "P001" in ids  # Priya Sharma
     assert "P002" in ids  # Priyanka Sharma
+    # …while resolution of the same name is a unique, exact first-name match
+    status, matches = resolve_patient_name("Priya")
+    assert status == "match"
+    assert [m["id"] for m in matches] == ["P001"]
 
 
 def test_retrieval_no_match():
@@ -112,6 +119,74 @@ def test_exact_full_name_is_flagged():
     # A partial name is NOT exact → falls back to the ambiguity rule
     partial = search_patients_by_name("Priya")
     assert all(not r["_exact"] for r in partial)
+
+
+# ── Patient-name resolution priorities (Gemini-extracted name → database) ───
+
+def test_resolve_exact_full_name():
+    status, matches = resolve_patient_name("Priya Sharma")
+    assert status == "match"
+    assert [m["id"] for m in matches] == ["P001"]
+
+
+def test_resolve_exact_first_name_beats_similar_names():
+    """'Priya' matches P001 exactly on first name; 'Priyanka' merely STARTS
+    with the same letters and must never make the name ambiguous."""
+    for name in ("Priya", "priya", "Priya's", " PRIYA ", "Priya."):
+        status, matches = resolve_patient_name(name)
+        assert status == "match", name
+        assert [m["id"] for m in matches] == ["P001"], name
+
+
+def test_resolve_priyanka_only():
+    status, matches = resolve_patient_name("Priyanka")
+    assert status == "match"
+    assert [m["id"] for m in matches] == ["P002"]
+
+
+def test_resolve_unique_last_name():
+    status, matches = resolve_patient_name("Khan")
+    assert status == "match"
+    assert [m["id"] for m in matches] == ["P004"]
+
+
+def test_resolve_shared_last_name_is_ambiguous():
+    """"Sharma" matches two patients at the same priority → user must choose."""
+    status, matches = resolve_patient_name("Sharma")
+    assert status == "ambiguous"
+    assert [m["id"] for m in matches][:2] == ["P001", "P002"]
+
+
+def test_resolve_two_patients_with_same_first_name(monkeypatch):
+    """Genuine ambiguity: two patients literally named Priya → ask, never pick."""
+    from services import retrieval
+    monkeypatch.setattr(retrieval, "_load_patients", lambda: [
+        {"id": "P101", "name": "Priya Sharma"},
+        {"id": "P102", "name": "Priya Singh"},
+    ])
+    status, matches = resolve_patient_name("Priya")
+    assert status == "ambiguous"
+    assert [m["id"] for m in matches] == ["P101", "P102"]
+    # An exact full name still resolves to exactly one of them
+    status, matches = resolve_patient_name("Priya Singh")
+    assert status == "match"
+    assert [m["id"] for m in matches] == ["P102"]
+
+
+def test_resolve_fuzzy_used_only_when_no_exact_tier_matches():
+    """A near-miss spelling matches nothing exactly → the fuzzy tier decides."""
+    status, matches = resolve_patient_name("Rohan Verm")
+    assert status == "match"
+    assert [m["id"] for m in matches] == ["P005"]
+    # Two fuzzy candidates that are too close → still ambiguous
+    status, matches = resolve_patient_name("Pri")
+    assert status == "ambiguous"
+    assert {m["id"] for m in matches} == {"P001", "P002"}
+
+
+def test_resolve_unknown_name():
+    assert resolve_patient_name("Rahul") == ("none", [])
+    assert resolve_patient_name("") == ("none", [])
 
 
 # ── Provider failure / malformed output resilience ───────────────────────────
@@ -229,6 +304,27 @@ def test_demo_dictation_site_unspecified_when_absent():
     assert any("site" in u.lower() for u in result.uncertainties)
 
 
+def test_demo_dictation_each_finding_keeps_its_own_site():
+    """A finding carries the location it actually documents — bare FDI numbers
+    count — and never borrows a tooth named elsewhere in the transcript."""
+    result = _demo_structure_dictation(
+        "Periapical radiolucency at tooth 26. Mild horizontal bone loss at 46."
+    )
+    assert [f["site"] for f in result.findings] == ["tooth 26", "tooth 46"]
+    # Observations stay verbatim, so the dictated wording of each site survives
+    assert [f["observation"] for f in result.findings] == [
+        "Periapical radiolucency at tooth 26.",
+        "Mild horizontal bone loss at 46.",
+    ]
+    assert result.findings[1]["severity"] == "mild"
+
+    # A measurement or percentage is never mistaken for a tooth number
+    measured = _demo_structure_dictation(
+        "Horizontal bone loss measured at 46% around tooth 36."
+    )
+    assert measured.findings[0]["site"] == "tooth 36"
+
+
 def test_demo_dictation_never_adds_clinical_terms():
     """A term absent from the transcript must never appear in the draft."""
     result = _demo_structure_dictation("Mild bone loss noted at lower left molar.")
@@ -251,7 +347,7 @@ def test_call_llm_routes_to_gemini(monkeypatch):
 
 
 def test_parse_llm_json_tolerates_code_fences():
-    """Gemini often wraps JSON in ```json fences — parsing must tolerate them."""
+    """Gemini often wraps JSON in ```json fences, so parsing must tolerate them."""
     from services.llm_service import _parse_llm_json
     raw = '```json\n{"intent": "follow_up", "patient_name": null}\n```'
     assert _parse_llm_json(raw) == {"intent": "follow_up", "patient_name": None}
@@ -319,7 +415,7 @@ def test_dictation_grounded_findings_kept_and_invented_dropped(monkeypatch):
 
 def test_follow_up_fabricated_evidence_replaced(monkeypatch):
     """Evidence strings not found in the report must be replaced with the
-    report's own findings — fabricated evidence never reaches the client."""
+    report's own findings; fabricated evidence never reaches the client."""
     llm_service = _force_live_mode(monkeypatch)
     fake = json.dumps({
         "answer": "Mild horizontal bone loss is present.",
@@ -363,7 +459,7 @@ def test_split_metadata_separates_header_from_clinical():
 
 def test_split_metadata_mixed_line_stays_clinical():
     """A line beginning with a key but carrying a sentence must NOT be
-    swallowed into metadata — clinical content is preserved."""
+    swallowed into metadata; clinical content is preserved."""
     clinical, meta = _split_metadata("name: Priya. Mild bone loss at 46.")
     assert "name" not in meta
     assert "Mild bone loss" in clinical
@@ -380,6 +476,98 @@ def test_metadata_only_input_yields_no_findings():
     assert result.transcript == transcript
     assert result.metadata == {"name": "Priya Sharma", "dob": "1990-05-14"}
     assert result.requires_review is True
+
+
+# ── Usability gate: noise must never become a savable draft ────────────────
+
+def test_has_clinical_signal_separates_dictation_from_noise():
+    """Only dental-radiology vocabulary counts as a dictation; questions,
+    chatter and voice-input noise contain none of it."""
+    from services.llm_service import _has_clinical_signal
+
+    for text in (
+        "Mild bone loss noted at lower left molar.",
+        "Periapical radiolucency at tooth 26, approximately 4mm.",
+        "No significant findings noted.",
+        "Restoration present on tooth 16.",
+        "Normal study.",
+        "No issues with tooth 26.",
+        "The previous OPG documented chronic periodontitis.",
+    ):
+        assert _has_clinical_signal(text), text
+
+    for text in (
+        "what the dark report for 2:36@",
+        "please send me the report tomorrow",
+        "lorem ipsum dolor sit amet",
+        "asdkjh qwe zxcv",
+    ):
+        assert not _has_clinical_signal(text), text
+
+
+def test_unusable_transcript_gets_no_draft(monkeypatch):
+    """Noise input short-circuits: no provider call, no findings, NO draft."""
+    llm_service = _force_live_mode(monkeypatch)
+    calls: list = []
+    monkeypatch.setattr(llm_service, "_call_llm", lambda *a, **k: calls.append(a) or "{}")
+
+    transcript = "what the dark report for 2:36@"
+    result = llm_service.structure_dictation(transcript)
+    assert result.usable is False
+    assert result.findings == []
+    assert result.draft_report == ""          # nothing to edit, nothing to save
+    assert result.transcript == transcript
+    assert result.requires_review is True
+    assert result.fallback_reason             # the reason is surfaced to the UI
+    assert calls == []                        # noise never reaches the provider
+    assert any("clinical" in u.lower() for u in result.uncertainties)
+
+
+def test_model_declared_unusable_suppresses_the_draft(monkeypatch):
+    """Belt and braces: the model may judge a clinical-LOOKING transcript
+    unusable; that verdict alone removes the draft (no retry, no fallback)."""
+    llm_service = _force_live_mode(monkeypatch)
+    payload = json.dumps({
+        "findings": [],
+        "anatomical_site": "",
+        "draft_report": "CLINICAL DICTATION DRAFT",
+        "uncertainties": ["Dictation is incomplete or unclear"],
+        "usable": False,
+        "requires_review": True,
+    })
+    calls: list = []
+
+    def _stub(system, user):
+        calls.append(user)
+        return payload
+
+    monkeypatch.setattr(llm_service, "_call_llm", _stub)
+    # Passes the deterministic gate ("bone") but is still not a dictation
+    result = llm_service.structure_dictation("bone ??? honestly no idea")
+    assert result.usable is False
+    assert result.findings == []
+    assert result.draft_report == ""
+    assert len(calls) == 1   # no empty-findings retry, no deterministic fallback
+
+
+def test_model_unusable_verdict_wins_over_echoed_findings(monkeypatch):
+    """Even when the model echoes the noise back as a finding, usable=false
+    takes precedence, so the draft can never be rebuilt from it."""
+    llm_service = _force_live_mode(monkeypatch)
+    payload = json.dumps({
+        "findings": [{"site": "see transcript", "observation": "bone", "severity": "unspecified"}],
+        "anatomical_site": "bone",
+        "draft_report": "CLINICAL DICTATION DRAFT\nbone",
+        "uncertainties": [],
+        "usable": False,
+        "requires_review": True,
+    })
+    monkeypatch.setattr(llm_service, "_call_llm", lambda *a, **k: payload)
+
+    result = llm_service.structure_dictation("bone ??? honestly no idea")
+    assert result.usable is False
+    assert result.findings == []
+    assert result.draft_report == ""
 
 
 def test_is_metadata_finding_detects_header_line():
@@ -481,6 +669,101 @@ def test_no_name_as_finding_dropped(monkeypatch):
     assert len(result.findings) == 1
 
 
+# ── Follow-up dictations ("no new findings" must not become "no findings") ───
+
+_FOLLOWUP_TRANSCRIPT = (
+    "The previous OPG documented generalized moderate horizontal alveolar bone loss "
+    "consistent with chronic periodontitis, and a fully erupted lower right third "
+    "molar, tooth 48. No new radiographic findings have been provided for the "
+    "current examination."
+)
+
+
+def _dictation_payload(findings):
+    return json.dumps({
+        "findings": findings,
+        "anatomical_site": "lower right molar",
+        "draft_report": "CLINICAL DICTATION DRAFT\nFINDINGS: see below.",
+        "uncertainties": [],
+        "requires_review": True,
+    })
+
+
+def test_dictation_prompt_demands_historical_and_current_split(monkeypatch):
+    """The prompt must tell the model to structure prior-study findings and to
+    never answer with an empty findings list for a clinical transcript."""
+    llm_service = _force_live_mode(monkeypatch)
+    prompts = []
+
+    def _stub(system, user):
+        prompts.append(system)
+        return _dictation_payload([
+            {"site": "lower right molar",
+             "observation": "generalized moderate horizontal alveolar bone loss",
+             "severity": "moderate", "context": "historical"},
+        ])
+
+    monkeypatch.setattr(llm_service, "_call_llm", _stub)
+    result = llm_service.structure_dictation(_FOLLOWUP_TRANSCRIPT)
+    assert result.fallback_reason is None
+    system = prompts[0]
+    assert "historical" in system.lower() and "current" in system.lower()
+    assert "never be empty" in system.lower()
+
+
+def test_dictation_empty_ai_findings_retried_with_corrective_nudge(monkeypatch):
+    """A model that answers with findings: [] gets ONE corrective retry, and a
+    good second answer is used as genuine AI output (no fallback flag)."""
+    llm_service = _force_live_mode(monkeypatch)
+    prompts = []
+    replies = [
+        _dictation_payload([]),  # first answer: nothing structured
+        _dictation_payload([
+            {"site": "lower right molar",
+             "observation": "generalized moderate horizontal alveolar bone loss consistent with chronic periodontitis",
+             "severity": "moderate", "context": "historical"},
+            {"site": "current examination",
+             "observation": "No new radiographic findings have been provided for the current examination",
+             "severity": "none", "context": "current"},
+        ]),
+    ]
+
+    def _stub(system, user):
+        prompts.append(system)
+        return replies[len(prompts) - 1]
+
+    monkeypatch.setattr(llm_service, "_call_llm", _stub)
+    result = llm_service.structure_dictation(_FOLLOWUP_TRANSCRIPT)
+
+    assert len(prompts) == 2  # the empty answer triggered exactly one retry
+    assert "must not be empty" in prompts[1]
+    assert result.fallback_reason is None  # genuinely AI-structured
+    assert len(result.findings) == 2
+    assert {f["context"] for f in result.findings} == {"historical", "current"}
+
+
+def test_dictation_persistently_empty_ai_output_never_says_metadata_only(monkeypatch):
+    """Regression: when the AI keeps returning no findings for a transcript that
+    DOES contain clinical narrative, structure it deterministically and never
+    claim the input was header/metadata lines only."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(llm_service, "_call_llm", lambda *a, **k: _dictation_payload([]))
+
+    result = llm_service.structure_dictation(_FOLLOWUP_TRANSCRIPT)
+
+    # Real structure, not an empty panel
+    assert len(result.findings) == 2
+    assert "chronic periodontitis" in json.dumps(result.findings).lower()
+    # Honest provenance
+    assert result.fallback_reason is not None
+    assert "deterministic" in result.fallback_reason.lower()
+    assert "header/metadata" not in result.fallback_reason.lower()
+    assert "only header/metadata lines provided" not in " ".join(result.uncertainties).lower()
+    assert "CLINICAL DICTATION DRAFT" in result.draft_report
+    assert _FOLLOWUP_TRANSCRIPT[:40] in result.transcript
+    assert result.requires_review is True
+
+
 # ── New additive report fields ───────────────────────────────────────────────
 
 def test_report_records_carry_new_fields():
@@ -505,7 +788,7 @@ def test_report_record_null_tooth_and_billing():
 # ── Conversational fallbacks (demo mode / provider failure) ──────────────────
 
 def test_demo_interpret_greeting_only_for_bare_salutations():
-    """The deterministic fallback recognises only bare salutations — it is not
+    """The deterministic fallback recognises only bare salutations; it is not
     a conversational parser."""
     assert _demo_interpret_query("hi").intent == "greeting"
     assert _demo_interpret_query("Hello there!").intent == "greeting"
@@ -554,7 +837,7 @@ def test_interpret_identity_via_llm(monkeypatch):
         llm_service, "_call_llm",
         lambda *a, **k: json.dumps({"intent": "assistant_identity"}),
     )
-    result = llm_service.interpret_query("just curious — which model am i talking to?")
+    result = llm_service.interpret_query("just curious, which model am i talking to?")
     assert result.intent == "assistant_identity"
     assert result.fallback_reason is None
 

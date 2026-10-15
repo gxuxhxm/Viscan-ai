@@ -7,7 +7,7 @@ const SpeechRecognitionCtor =
     ? window.SpeechRecognition || window.webkitSpeechRecognition
     : undefined;
 
-const NO_SPEECH_MSG = 'No speech detected — type instead.';
+const NO_SPEECH_MSG = 'No speech detected. Type instead.';
 const SILENCE_MS = 5000; // auto-stop after ~5s without new speech
 const TICK_MS = 250;     // how often the silence timer checks the clock
 
@@ -40,7 +40,7 @@ export function useSpeechRecognition({ onFinalTranscript, lang = 'en-IN' } = {})
   const lastActivityRef = useRef(0);  // timestamp of the most recent result
   const timerRef = useRef(null);      // silence-timer interval id
   const spokenRef = useRef(false);    // at least one final speech chunk arrived
-  const abortedRef = useRef(false);   // fatal error / cancel — no auto-submit
+  const abortedRef = useRef(false);   // fatal error / cancel: never auto-submit
   const finalizeRef = useRef(null);
 
   // Keep the latest callback available to recognition handlers that were
@@ -92,16 +92,16 @@ export function useSpeechRecognition({ onFinalTranscript, lang = 'en-IN' } = {})
     };
 
     rec.onerror = (event) => {
-      if (event.error === 'aborted') return;  // intentional stop — onend handles it
+      if (event.error === 'aborted') return;  // intentional stop; onend handles it
       if (event.error === 'no-speech') return; // handled as an empty session in onend
-      abortedRef.current = true;               // fatal — never auto-submit
+      abortedRef.current = true;               // fatal; never auto-submit
       clearTimer();
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-        setError('Microphone permission denied — type instead.');
+        setError('Microphone permission denied. Type instead.');
       } else if (event.error === 'network') {
-        setError('Speech service unavailable — type instead.');
+        setError('Speech service unavailable. Type instead.');
       } else {
-        setError('Speech recognition error — type instead.');
+        setError('Speech recognition error. Type instead.');
       }
     };
 
@@ -139,7 +139,7 @@ export function useSpeechRecognition({ onFinalTranscript, lang = 'en-IN' } = {})
       recRef.current = null;
       setListening(false);
       clearTimer();
-      setError('Could not start the microphone — type instead.');
+      setError('Could not start the microphone. Type instead.');
       return;
     }
 
@@ -163,7 +163,7 @@ export function useSpeechRecognition({ onFinalTranscript, lang = 'en-IN' } = {})
   }, [lang, clearTimer]);
 
   const stop = useCallback(() => {
-    // Manual override: graceful stop — onend flushes interim and auto-submits.
+    // Manual override: graceful stop; onend flushes interim and auto-submits.
     clearTimer();
     recRef.current?.stop();
   }, [clearTimer]);
@@ -183,7 +183,7 @@ export function useSpeechRecognition({ onFinalTranscript, lang = 'en-IN' } = {})
     setInterim('');
   }, [clearTimer]);
 
-  // Abort any live session on unmount — never submit from a dead panel.
+  // Abort any live session on unmount; never submit from a dead panel.
   useEffect(() => () => {
     clearTimer();
     abortedRef.current = true;

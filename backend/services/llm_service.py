@@ -14,21 +14,28 @@ logger = logging.getLogger("viscan.llm")
 # ---------------------------------------------------------------------------
 
 class InterpretedQuery(BaseModel):
-    intent: str          # "greeting" | "assistant_identity" | "retrieve_report" |
-                         # "dictation" | "follow_up" | "unsupported" | "unknown"
+    intent: str          # "greeting" | "assistant_identity" | "assistant_capabilities" |
+                         # "about_app" | "small_talk" | "general_dental" |
+                         # "retrieve_report" | "patient_info" | "dictation" |
+                         # "follow_up" | "unavailable_action" | "unsupported" | "unknown"
     patient_name: Optional[str] = None
     report_type: Optional[str] = None   # OPG / PERIAPICAL / BITEWING / CBCT
     free_text: Optional[str] = None
     # Set when the LLM was unavailable/malformed and a deterministic
     # fallback parser was used instead (surfaced to the user).
     fallback_reason: Optional[str] = None
+    # Fields relevant to a patient_info intent (which demographic detail the
+    # user asked for: contact / dob / gender, or "all" for everything on file).
+    info_fields: Optional[list[str]] = None
 
     @field_validator("intent")
     @classmethod
     def validate_intent(cls, v: str) -> str:
         allowed = {
-            "greeting", "assistant_identity", "retrieve_report",
-            "dictation", "follow_up", "unsupported", "unknown",
+            "greeting", "assistant_identity", "assistant_capabilities", "about_app",
+            "small_talk", "general_dental", "retrieve_report",
+            "dictation", "follow_up", "patient_info", "unavailable_action",
+            "unsupported", "unknown",
         }
         if v not in allowed:
             raise ValueError(f"Invalid intent '{v}'. Must be one of {allowed}")
@@ -61,6 +68,10 @@ class StructuredDictation(BaseModel):
     fallback_reason: Optional[str] = None
     metadata: dict[str, str] = {}    # header lines stripped before structuring
     transcript: str = ""             # original transcript, echoed back verbatim
+    # False → the transcript held no usable clinical content (gibberish,
+    # unrelated question, stray voice input). No draft is produced for it and
+    # the client must not offer a save (see _has_clinical_signal()).
+    usable: bool = True
 
     @field_validator("findings")
     @classmethod
@@ -190,7 +201,7 @@ def _parse_llm_json(raw: str) -> dict:
 
 # Header keys a clinician may dictate as `key: value` lines before the
 # clinical narrative. These are NEVER sent to the model and never parsed as
-# clinical findings — they are echoed back verbatim as `metadata`.
+# clinical findings; they are echoed back verbatim as `metadata`.
 _METADATA_KEYS = ("name", "patient", "dob", "date", "tooth", "age", "sex", "id")
 _METADATA_LINE_RE = re.compile(
     r"^\s*(" + "|".join(_METADATA_KEYS) + r")\s*[:\-]\s*(.+?)\s*$",
@@ -275,16 +286,34 @@ REPORT_TYPE_RE = re.compile(
 _NAME_ANCHORS = r"open|show|get|fetch|retrieve|view|find|load|display|pull|for|of|from|patient"
 
 # Words that are never a patient name (guards against "Show me…", "the report…",
-# "open the opg report…").
+# "open the opg report…", and generic references like "of this person").
 _NAME_STOPWORDS = {
     "me", "the", "a", "an", "this", "that", "these", "those", "her", "his", "their",
     "my", "our", "your", "its", "it", "all", "any", "latest", "newest", "old",
     "report", "reports", "patient", "patients", "file", "files", "image", "images",
     "scan", "scans", "record", "records", "document", "documents", "chart", "name",
     "list", "summary", "details", "info", "information", "doctor", "dr", "clinic",
+    # generic references to a human that are not names
+    "person", "individual", "someone", "somebody", "anyone", "people", "gentleman",
+    "lady", "individuals", "folks",
     # radiology / request vocabulary
     "opg", "cbct", "bitewing", "periapical", "panoramic", "recent", "recently",
     "please", "full", "most", "findings", "finding", "result", "results",
+    # dental anatomy / clinical nouns are never patient names
+    # ("invent findings for tooth 38" must never search a patient "Tooth")
+    "tooth", "teeth", "molar", "molars", "premolar", "premolars", "incisor",
+    "incisors", "canine", "canines", "wisdom", "root", "canal", "canals",
+    "gum", "gums", "jaw", "sinus", "sinuses", "crown", "crowns", "filling",
+    "fillings", "implant", "implants", "denture", "dentures", "nerve", "enamel",
+    "plaque", "tartar", "calculus", "decay", "caries", "abscess", "lesion",
+    "radiograph", "radiographs", "radiolucency", "radiopacity", "xray",
+    # interrogatives / question scaffolding ("Who is Priya?", "Why?")
+    "who", "what", "when", "where", "why", "which", "how", "is", "are", "was",
+    "were", "do", "does", "did", "can", "could", "should", "would", "tell", "give",
+    # prepositions / particle verbs that anchor or follow a name candidate
+    # ("pull up the scan for rohan verma" → "Rohan Verma", never "Up")
+    "up", "down", "out", "off", "back", "about", "into", "over", "under",
+    "through", "again", "now", "here", "there", "then", "just", "only", "maybe",
 }
 
 # Single-word title-case name: "Priya Sharma"
@@ -294,6 +323,8 @@ _NAME_TITLE = r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
 def _valid_name(candidate: str) -> Optional[str]:
     """Validate a captured name candidate; returns a normalised name or None."""
     candidate = " ".join(candidate.split())
+    # Strip sentence punctuation first: "Why?" must never become a name.
+    candidate = candidate.strip("?.!,;:()[]{}\"'“”‘’")
     if not candidate:
         return None
     # Strip leading generic words and command verbs ("Open Priya" → "Priya",
@@ -376,6 +407,13 @@ def _extract_patient_name(text: str) -> Optional[str]:
         name = _valid_name(" ".join(words))
         if name:
             return name
+
+    # 5. A bare single word ("Priya"): a lone non-generic word is treated as a
+    #    patient name. Generic vocabulary is rejected by the stopword/anchor
+    #    lists inside _valid_name, so no patient-specific rule is needed.
+    words = text.split()
+    if len(words) == 1:
+        return _valid_name(words[0])
     return None
 
 
@@ -390,34 +428,231 @@ _DICTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ── Minimal conversational fallbacks ────────────────────────────────────────
-# Deliberately tiny and deterministic: they recognise a BARE salutation or an
-# explicit "who/what are you?" identity question, so the assistant can answer
-# honestly even without the LLM (demo mode / provider failure). They are NOT a
-# conversational parser — all other natural phrasing is the LLM's job.
-
-_GREETING_RE = re.compile(
-    r"(?i)^\s*(?:hi|hello|hey|howdy|hiya|greetings|good\s+(?:morning|afternoon|evening))"
-    r"(?:\s+there)?[!.,\s]*$"
+# A patient-info request: the user wants a demographic or contact detail about
+# a patient (phone, email, address, dob, age, gender) rather than a radiology
+# report. Deliberately specific so ordinary report commands ("open Priya's OPG")
+# are never re-routed here.
+_PATIENT_INFO_RE = re.compile(
+    r"\b(?:"
+    r"contact(?:\s+(?:details?|info(?:rmation)?))?|phone(?:\s*(?:number|no\.?)?)?|mobile|cell"
+    r"|call(?:\s+(?:him|her|them))?|email|e-mail|mailing\s+address|address"
+    r"|date\s+of\s+birth|d\.?o\.?b\.?|birthday|age|gender|sex"
+    r")\b",
+    re.IGNORECASE,
 )
 
+# ── Conversational / non-report intents (deterministic side) ─────────────────
+# Everything below recognises CLASSES of phrasing — any salutation-only
+# sentence, any "what can you do" capability question, any dental knowledge
+# question, any scheduling request — rather than individual phrases, so unseen
+# wording routes the same way. The aim is that a non-report message never gets
+# dressed up as a radiology request (and never inherits one canned answer).
+
+# Intents that are pure conversation: they never carry a patient name and can
+# never trigger a record lookup, whatever the text happens to contain.
+NON_PATIENT_INTENTS = {
+    "greeting", "assistant_identity", "assistant_capabilities", "about_app",
+    "small_talk", "general_dental", "unavailable_action",
+}
+
+# Salutation-only sentences: every word must be greeting vocabulary, and at
+# least one must be a real salutation ("hi team", "Hey, good morning!" ✓,
+# "hi, open Priya's OPG report" ✗ — it contains task words).
+_GREETING_CORE = {
+    "hi", "hello", "hey", "howdy", "hiya", "greetings", "yo", "morning",
+    "afternoon", "evening", "night", "gday", "howzit",
+}
+_GREETING_VOCAB = _GREETING_CORE | {
+    "hiya", "hii", "helloo", "heyy", "good", "day", "there", "everyone", "all",
+    "team", "folks", "doctor", "doc", "dr", "sir", "madam", "mam", "ma'am",
+    "welcome", "again", "friend", "friends", "guys", "pal",
+}
+
+
+def _is_bare_greeting(text: str) -> bool:
+    """True when the message is ONLY salutations/pleasantries, with no task."""
+    words = re.findall(r"[a-z']+", text.casefold())
+    if not words or not any(w in _GREETING_CORE for w in words):
+        return False
+    return all(w in _GREETING_VOCAB for w in words)
+
+
+# "What can you do?" — capability/feature questions about the assistant.
+# Deliberately requires a question word + "you", so report commands that use
+# the word "can" ("Can you open Priya's OPG?") are never captured here.
+_ASSISTANT_CAPABILITIES_RE = re.compile(
+    r"(?i)\b(?:"
+    r"(?:what|which|how)(?:'s|\s+(?:else|else's))?\s+(?:can|could|do|does|should)\s+you\b"
+    r"|what\s+(?:can|could)\s+you\s+(?:do|help|handle|assist|support|answer|manage|process|offer)\b"
+    r"|what\s+(?:do|does)\s+you\s+do\b"
+    r"|what\s+are\s+your\s+(?:capabilities|abilities|features|skills|functions|options)\b"
+    r"|what\s+are\s+you\s+(?:capable|able)\s+of\b"
+    r"|how\s+(?:can|do)\s+you\s+(?:help|assist|be\s+of\s+help|support\s+me)\b"
+    r"|(?:your|the)\s+(?:capabilities|abilities|feature\s+list)\b"
+    r")"
+)
+
+# "Who/what are you?" — identity / which model powers you.
 _ASSISTANT_IDENTITY_RE = re.compile(
     r"(?i)\b(?:who|what)\s+are\s+you\b"
+    # "tell me who you are" / "who you are" — same identity question, reworded
+    r"|(?:tell\s+me\s+)?(?:who|what)\s+you\s+are\b"
+    # "Which model powers you?" / "what model are you running?"
+    r"|\b(?:which|what)\s+model\b[^?.!]{0,30}\byou\b"
     r"|\bare\s+you\s+(?:really\s+|actually\s+)?(?:a\s+|an\s+|the\s+)?"
     r"(?:gemini|chatgpt|gpt(?:[\s-]?[\d.]+)?|claude|copilot|llm|ai|bot)\b"
     r"|\byou\s+(?:really\s+|actually\s+)?(?:a\s+|an\s+|the\s+)?"
     r"(?:gemini|chatgpt|gpt(?:[\s-]?[\d.]+)?|claude|copilot|llm|ai|bot)\b"
 )
 
+# "What is Viscan AI?" — questions about the app/product itself. Requires the
+# app to be named or an "…app/application" object, so a clinical question
+# ("What is this finding?") can never land here.
+_ABOUT_APP_RE = re.compile(
+    r"(?i)(?:"
+    r"\b(?:what|who|which|how|is|are|does|do|can|could|should|would|tell)\b"
+    r"[^?.!]{0,60}\bviscan(?:\s+ai)?\b"
+    r"|\btell\s+me\s+about\b[^?.!]{0,40}\b(?:viscan|app|application|software|platform|system)\b"
+    r"|what\s+(?:is|are)\s+(?:the\s+|this\s+)?(?:app|application|software)\b"
+    r"|what\s+does\s+(?:this|the\s+app|viscan(?:\s+ai)?)\b[^?.!]{0,20}\bdo\b"
+    r"|how\s+(?:do|does)\s+(?:this|the\s+app|viscan(?:\s+ai)?)\b[^?.!]{0,20}\bwork"
+    r"|\babout\s+(?:this|the)\s+(?:app|application|software|platform|system)\b"
+    r")"
+)
 
-def _demo_interpret_query(text: str) -> InterpretedQuery:
-    """Heuristic intent parsing — no LLM. Used in demo mode and as the
+# Outbound actions the app cannot perform (mailing/sharing a report out).
+# Checked before patient_info: "email this report to Dr Rao" is an action the
+# app cannot run, not a request for a patient's email address.
+_OUTBOUND_ACTION_RE = re.compile(
+    r"(?i)\b(?:(?:email|e-?mail|mail|send|share|forward|post)\s+"
+    r"(?:\w+\s+){0,3}(?:report|reports|file|files|scan|scans|image|images|"
+    r"attachment|results?|summary|it|them)\b)"
+)
+
+# Scheduling / record-management actions that are NOT implemented in this app.
+# Verbs (and the appointment nouns they imply): booking a scan, rescheduling,
+# deleting a record, etc. Never treated as report retrieval.
+_APP_ACTION_RE = re.compile(
+    r"(?i)\b(?:"
+    r"book(?:s|ed|ing)?|schedul(?:e|ed|es|ing)|reschedul(?:e|ed|es|ing)|"
+    r"cancel(?:l?(?:ed|ing|s))?|arrange(?:d|s|ment|ments)?|set\s+up|make\s+(?:an?\s+)?appointment|"
+    r"appointment[s]?|time\s+slots?|slots?|delet(?:e|es|ed|ing)|archiv(?:e|es|ed|ing)"
+    r")\b"
+)
+
+# Harmless social conversation: jokes, thanks, farewells, "how are you".
+# Recognised as a class (any joke request / pleasantry), never a report task.
+_SMALL_TALK_RE = re.compile(
+    r"(?i)\b(?:"
+    r"joke[s]?|funny|laugh(?:ing|ed)?|lol|lmao|haha|hehe|pun\b"
+    r"|how(?:'s|\s+is|\s+are|\s+does)?\s+(?:it\s+going|you(?:\s+doing|\s+guys|\s+all)?|things|life)\b"
+    r"|thank(?:s|you|you\s+very\s+much)|appreciate|cheers\b"
+    r"|goodbye|good\s*bye|bye+|see\s+ya|see\s+you|take\s+care|good\s+night|goodnight"
+    r"|what(?:'s|\s+is)\s+new|how(?:'s|\s+is)\s+your\s+day"
+    r"|are\s+we\s+friends|miss\s+me"
+    r")"
+)
+
+# Words that unambiguously refer to a stored report / its content. Used for
+# report-grounded questions ("What are the key findings?") and for the
+# "<Name> report" retrieval shorthand ("Rahul report").
+_REPORT_CUE_RE = re.compile(
+    r"(?i)\b(?:"
+    r"reports?|findings?|impression|summari[sz]\w*|summary|summation|"
+    r"results?|radiographs?|x-?rays?|study|studies"
+    r")\b"
+)
+
+# A retrieval verb needs a target (a patient, a report type, or a report
+# noun), so "how do I get rid of plaque?" is never a retrieval attempt.
+_RETRIEVAL_TARGET_RE = re.compile(
+    r"(?i)\b(?:"
+    r"reports?|records?|scans?|images?|files?|chart|radiographs?|x-?rays?|films?|"
+    r"opg|orthopantomogram|panoram\w*|periapical|bitewings?|cbct|cone[\s-]beam|patients?"
+    r")\b"
+)
+
+# A demonstrative/pronoun right next to a report noun: the user is pointing at
+# the open report ("What does this OPG show?"), which is report-grounded.
+_DEICTIC_REPORT_RE = re.compile(
+    r"(?i)(?:"
+    r"\b(?:this|that|these|those|it|they|them|her|his)\b[\s\w]{0,30}\b"
+    r"(?:reports?|scans?|images?|radiographs?|x-?rays?|findings?|studies|"
+    r"opg|cbct|bitewings?|periapical|panoram\w*)\b"
+    r"|\b(?:reports?|scans?|images?|radiographs?|findings?)\b[\s\w]{0,20}\b"
+    r"(?:it|this|that|them)\b"
+    r")"
+)
+
+# General dental / oral-health vocabulary for EDUCATIONAL questions. Deliberately
+# excludes ultra-generic report words ("normal", "findings", "pain" alone), so
+# "Is this normal?" about an open report stays a report question.
+_GENERAL_DENTAL_RE = re.compile(
+    r"(?i)\b(?:"
+    r"teeth|tooth|toothbrush|toothpaste|gum[s]?|gingiv\w*|gingivitis|"
+    r"cavit(?:y|ies)|caries|decay|plaque|tartar|calculus|floss(?:ing)?|brush(?:ing)?|"
+    r"dentist[s]?|dental|orthodont\w*|braces|retainer[s]?|"
+    r"wisdom\s+teeth|root\s+canal|canals?|pulp\b|enamel|dentin\b|"
+    r"sensitivit\w+|sensitive|bleed(?:ing|s)?|swelling|abscess|"
+    r"periodont\w*|halitosis|breath|"
+    r"whitening|scaling|polishing|fillings?|crowns?|bridges?|implants?|dentures?|"
+    r"extraction[s]?|root\s+planing|deep\s+cleaning|"
+    r"tmj|jaw|mandible|maxilla|sinus(?:es)?|"
+    r"x-?rays?|radiograph\w*|opg|cbct|bitewings?|periapical|panoram\w*|"
+    r"impacted|impaction|erupt\w*|numbness|toothache|ache\b|"
+    r"treatment|diagnos[ei]s|infection|disease"
+    r")\b"
+)
+
+# Patient-info requests need a patient anchor (a name, a possessive, "the
+# patient") or an unambiguous contact token, so general questions that merely
+# contain "age", "sex" or "call" ("At what age do wisdom teeth come in?",
+# "Should I call a dentist?") are never patient lookups.
+_STRONG_CONTACT_RE = re.compile(
+    r"(?i)\b(?:"
+    r"contact(?:\s+(?:details?|info(?:rmation)?))?|phone(?:\s*(?:number|no\.?)?)?|mobile|cell|"
+    r"e-?mail|mailing\s+address|address|date\s+of\s+birth|d\.?o\.?b\.?|birthday|"
+    r"reach(?:\s+(?:him|her|them))?"
+    r")\b"
+)
+
+_PATIENT_CONTEXT_RE = re.compile(
+    r"(?i)\b(?:patient|person|him|her|them|his|they|this\s+one|one)\b|['’]s\b"
+)
+
+
+def _demo_patient_info_fields(text: str) -> list[str]:
+    """
+    Deterministically classify which patient detail(s) a request asks for.
+    Returns a subset of {"contact","dob","gender"}; "contact" covers any
+    reach-them detail (phone, mobile, email, address, "how do I reach X").
+    """
+    fields: list[str] = []
+    if re.search(
+        r"\b(?:contact|phone|mobile|cell|email|e-mail|mail|address|reach|call)\b",
+        text, re.IGNORECASE,
+    ):
+        fields.append("contact")
+    if re.search(r"\b(?:date\s+of\s+birth|d\.?o\.?b\.?|birthday)\b", text, re.IGNORECASE):
+        fields.append("dob")
+    if re.search(r"\b(?:gender|sex|age)\b", text, re.IGNORECASE):
+        fields.append("gender")
+    return fields
+
+
+def _demo_interpret_query(
+    text: str, session_context: Optional[dict] = None
+) -> InterpretedQuery:
+    """Heuristic intent parsing: no LLM. Used in demo mode and as the
     deterministic fallback when the LLM provider is unavailable.
 
-    Deliberately conservative: it handles report retrieval, dictation cues,
-    follow-up questions, bare salutations and explicit identity questions.
-    It does NOT attempt to understand arbitrary conversation — that is the
-    LLM's job.
+    Conservative about facts (it never invents patient data) but broad about
+    CLASSES of conversation: it separates greetings, identity, capabilities,
+    app questions, small talk, general dental knowledge, unimplemented actions,
+    report retrieval, report questions and dictation. A non-report message is
+    therefore answered as a conversation instead of being pushed at a
+    radiology-request handler. Anything it cannot place stays `unknown` and the
+    caller answers with scope guidance.
     """
     # Detect report type (word-bounded, case-insensitive)
     report_type = None
@@ -426,37 +661,116 @@ def _demo_interpret_query(text: str) -> InterpretedQuery:
         key = m.group(1).lower()
         report_type = REPORT_TYPE_KEYWORDS.get(key) or REPORT_TYPE_KEYWORDS.get(key.replace("-", " "))
 
+    # Extracted once, up front: the retrieval rules need it, while every
+    # conversation intent discards it (it never targets a record).
+    patient_name = _extract_patient_name(text)
+    active_report = bool(
+        session_context and session_context.get("active_report_id")
+    )
+    is_question = bool(_QUESTION_RE.search(text))
+
+    has_retrieval_verb = _RETRIEVE_VERB_RE.search(text) is not None
+    # A verb inside a QUESTION needs a report noun/type to count as retrieval
+    # ("could you pull up the latest scan for rohan verma?" ✓, but "how do I get
+    # rid of plaque?" must stay a dental question). Outside a question the
+    # extracted name is enough ("open priya").
+    has_report_target = bool(
+        report_type or _RETRIEVAL_TARGET_RE.search(text) or _REPORT_CUE_RE.search(text)
+    )
+    is_retrieval = (
+        (has_retrieval_verb and (has_report_target or (bool(patient_name) and not is_question)))
+        # "Rahul report" / "Priya Sharma report" — a name with a report noun
+        or (patient_name and (report_type or _REPORT_CUE_RE.search(text)))
+    )
+
     # Detect intent. Order matters:
-    #   1. bare salutation        ("Hi", "Hello there!")
-    #   2. identity question      ("Are you Gemini?", "Who are you?")
-    #   3. explicit retrieval verbs  ("Open Priya's OPG report")
-    #   4. questions                 ("What are the key findings?", "Summarise her report")
-    #   5. dictation cues            ("Note: mild bone loss at 46")
-    #   6. a patient name without a verb  ("Priya's latest report")
-    if _GREETING_RE.match(text):
+    #   1. bare salutation          ("Hi", "Hey, good morning!")
+    #   2. capabilities question    ("What can you do?")
+    #   3. identity question        ("Are you Gemini?", "Who are you?")
+    #   4. app question             ("What is Viscan AI?")
+    #   5. unimplemented action     ("email this report to…", "book a scan…")
+    #   6. patient details          ("Priya's phone number")
+    #   7. report-pointing question ("What does this OPG show?")
+    #   8. report retrieval         ("Open Priya's OPG report", "Rahul report")
+    #   9. small talk               ("Tell me a joke", "thanks!")
+    #  10. dictation cue            ("Note: mild bone loss at 46")
+    #  11. report-grounded question ("What are the key findings?")
+    #  12. other questions          → dental / patient / contextual / unsupported
+    #  13. a patient name without a verb  ("Priya's latest report")
+    if _is_bare_greeting(text):
         intent = "greeting"
+    elif _ASSISTANT_CAPABILITIES_RE.search(text):
+        intent = "assistant_capabilities"
     elif _ASSISTANT_IDENTITY_RE.search(text):
         intent = "assistant_identity"
-    elif _RETRIEVE_VERB_RE.search(text):
-        intent = "retrieve_report"
-    elif _QUESTION_RE.search(text):
+    elif _ABOUT_APP_RE.search(text):
+        intent = "about_app"
+    elif _OUTBOUND_ACTION_RE.search(text):
+        # Before patient_info: "email this report to Dr Rao" is an action the
+        # app cannot run, not a request for a patient's email address.
+        intent = "unavailable_action"
+    elif _PATIENT_INFO_RE.search(text) and (
+        _STRONG_CONTACT_RE.search(text)
+        or _PATIENT_CONTEXT_RE.search(text)
+        or patient_name
+    ):
+        # Must precede the retrieval-verb rule: "get me Priya's contact details"
+        # contains "get", but the user wants her contact info, not a report.
+        intent = "patient_info"
+    elif _APP_ACTION_RE.search(text):
+        # Booking/scheduling/deleting is not implemented, and it must never be
+        # mistaken for retrieval just because a name follows it
+        # ("book a scan for Priya").
+        intent = "unavailable_action"
+    elif is_question and _DEICTIC_REPORT_RE.search(text):
+        # Pointing at a report ("What does this OPG show?") is a report-grounded
+        # question, not a fresh retrieval — even though the sentence contains a
+        # retrieval-looking verb such as "show".
         intent = "follow_up"
+    elif is_retrieval:
+        intent = "retrieve_report"
+    elif _SMALL_TALK_RE.search(text):
+        intent = "small_talk"
+    elif _DICTATION_RE.search(text) and not is_question:
+        intent = "dictation"
+    elif _REPORT_CUE_RE.search(text):
+        # Report wording with no patient name attached: a question about a
+        # (typically open) report, not a new retrieval request.
+        intent = "follow_up"
+    elif is_question:
+        if _GENERAL_DENTAL_RE.search(text):
+            # General dental knowledge: educational, NOT a patient finding.
+            # Checked before the name/report fallbacks so a dental question is
+            # never turned into a record lookup.
+            intent = "general_dental"
+        elif patient_name:
+            # The question names a patient → their record ("Who is Priya?")
+            intent = "retrieve_report"
+        elif active_report:
+            # Contextual follow-up while a report is open
+            intent = "follow_up"
+        else:
+            intent = "unsupported"
     elif _DICTATION_RE.search(text):
         intent = "dictation"
+    elif patient_name:
+        intent = "retrieve_report"
     else:
         intent = "unknown"
 
-    patient_name = None
-    if intent not in ("greeting", "assistant_identity"):
-        patient_name = _extract_patient_name(text)
-    if intent == "unknown" and patient_name:
-        intent = "retrieve_report"
+    # Conversation never targets a record: drop any name-shaped token the
+    # extractor happened to pick up out of chit-chat.
+    if intent in NON_PATIENT_INTENTS:
+        patient_name = None
 
     return InterpretedQuery(
         intent=intent,
         patient_name=patient_name,
         report_type=report_type,
         free_text=text,
+        info_fields=(
+            _demo_patient_info_fields(text) if intent == "patient_info" else None
+        ),
     )
 
 
@@ -499,6 +813,39 @@ _STRUCTURE_RULES = [
 
 _TOOTH_NUM_RE = re.compile(r"\b(?:tooth|teeth)\s*(?:number\s*|#\s*)?(\d{1,2})\b", re.I)
 
+# Bare FDI tooth numbers: dictation often drops the word "tooth"
+# ("bone loss at 46"), which would otherwise leave the finding labelled with a
+# site it never mentioned. Restricted to the FDI range behind a dental cue and
+# with measurement/percentage units excluded, so "at 46 mm" or "46%" is never
+# mistaken for a tooth.
+_BARE_TOOTH_RE = re.compile(
+    r"(?i)(?:#|\b(?:at|in|on|of)\b)\s*#?\s*(1[1-8]|2[1-8]|3[1-8]|4[1-8])\b"
+    r"(?!\s?(?:%|mm|cm|year|yr|month|day|age))"
+)
+
+# Vocabulary that only a genuine dental-radiology dictation contains. Used by
+# the usability gate (_has_clinical_signal): nothing here is a generic word, so
+# questions/chatter/typos ("what the dark report for 2:36@") match nothing.
+_CLINICAL_SIGNAL_RE = re.compile(
+    r"\b(?:"
+    # imaging / modality
+    r"radiograph\w*|radiolucen\w+|radiopaque\w*|opg|panoram\w+|cbct|bitewing|periapical|x-?rays?"
+    # teeth, supporting structures and findings
+    r"|caries|cavit(?:y|ies)|decay|crown|tooth|teeth|molar|premolar|incisor|canine|wisdom"
+    r"|root|canal|pulp\w*|gingiv\w*|periodont\w+|alveolar|bone|calculus|plaque"
+    r"|mobility|furcation|abscess|cyst|lesion|impacted|erupt\w*|resorption|fracture"
+    r"|widened|sclerosis|apical|lucency|opacit\w+|trabecular|defect"
+    r"|sinus|implant|prosthe\w+|restor\w+|filling|extraction|denture|orthodont\w+"
+    r"|mandible|maxilla|jaw|quadrant|arch"
+    # symptoms, findings, severity and measurement
+    r"|pain|tender\w*|sensitivit\w+|sensitive|bleeding|swelling|symptom\w*"
+    r"|findings?|abnormalit\w+|unremarkable|normal|within normal limits"
+    r"|no (?:new |significant |other )?(?:issues|concerns|complaints|symptoms)"
+    r"|mild|moderate|severe|slight|marked|significant|millimet\w+|mm"
+    r")\b",
+    re.I,
+)
+
 
 def _detect_severity(sentence: str) -> str:
     """Return a severity label only when literally stated in the sentence."""
@@ -525,6 +872,10 @@ def _detect_site(text: str) -> Optional[str]:
         tooth = f"tooth {m.group(1)}"
         if tooth not in parts:
             parts.append(tooth)
+    for m in _BARE_TOOTH_RE.finditer(text):
+        tooth = f"tooth {m.group(1)}"
+        if tooth not in parts:
+            parts.append(tooth)
     return ", ".join(parts) if parts else None
 
 
@@ -546,7 +897,7 @@ def _split_sentences(text: str) -> list[str]:
 
 def _demo_structure_dictation(text: str) -> StructuredDictation:
     """
-    Deterministic dictation structuring — demo mode only.
+    Deterministic dictation structuring, demo mode only.
     Splits the transcript into findings, echoing each sentence verbatim and
     deriving site/severity only from words that are literally present.
     Never invents clinical observations.
@@ -564,24 +915,24 @@ def _demo_structure_dictation(text: str) -> StructuredDictation:
         })
 
     uncertainties = [
-        "Demo mode: deterministic parsing only — no AI interpretation performed",
-        "All fields unverified — clinician confirmation required",
+        "Demo mode: deterministic parsing only, no AI interpretation performed",
+        "All fields unverified, clinician confirmation required",
     ]
     if not overall_site:
         uncertainties.append("Anatomical site not stated in the transcript")
     if any(f["severity"] == "unspecified" for f in findings):
         uncertainties.append("Severity not stated for some findings")
 
-    anatomical_site = overall_site or "unspecified — please review"
+    anatomical_site = overall_site or "unspecified (please review)"
 
     findings_block = "\n".join(
-        f"{i}. [{f['site']}] (severity: {f['severity']}) — {f['observation']}"
+        f"{i}. [{f['site']}] (severity: {f['severity']}): {f['observation']}"
         for i, f in enumerate(findings, start=1)
     )
 
     draft_report = (
         "CLINICAL DICTATION DRAFT\n\n"
-        "[DEMO MODE — deterministic parser, no AI interpretation]\n"
+        "[DEMO MODE: deterministic parser, no AI interpretation]\n"
         "Nothing below was inferred: observations are verbatim from the transcript.\n\n"
         f"TRANSCRIPT:\n{text}\n\n"
         f"FINDINGS:\n{findings_block}\n\n"
@@ -606,14 +957,15 @@ def _demo_structure_dictation(text: str) -> StructuredDictation:
 def interpret_query(text: str, session_context: Optional[dict] = None) -> InterpretedQuery:
     """
     Use the LLM (Gemini when configured) to classify and parse the user's
-    message: greetings, assistant-identity questions, report retrieval,
-    dictation, contextual follow-ups, or unsupported requests. Falls back to
-    conservative heuristics in demo mode / on provider failure.
-    Never fabricates patient data.
+    message: greetings, assistant identity/capabilities, app questions, small
+    talk, general dental knowledge, unimplemented actions, report retrieval,
+    dictation, report-grounded and contextual follow-ups, or unsupported
+    requests. Falls back to conservative heuristics in demo mode / on provider
+    failure. Never fabricates patient data.
     """
     if DEMO_MODE:
-        result = _demo_interpret_query(text)
-        logger.info("chat: demo mode (no LLM call) — deterministic intent=%s", result.intent)
+        result = _demo_interpret_query(text, session_context)
+        logger.info("chat: demo mode (no LLM call); deterministic intent=%s", result.intent)
         return result
 
     ctx_str = ""
@@ -623,23 +975,56 @@ def interpret_query(text: str, session_context: Optional[dict] = None) -> Interp
     system = (
         "You are the query interpreter for Viscan AI, a dental radiology assistant app. "
         "Given a user's free-text message, output ONLY a JSON object with these fields:\n"
-        '  "intent": one of ["greeting","assistant_identity","retrieve_report",'
-        '"dictation","follow_up","unsupported"]\n'
+        '  "intent": one of ["greeting","assistant_identity","assistant_capabilities",'
+        '"about_app","small_talk","general_dental","retrieve_report",'
+        '"dictation","follow_up","patient_info","unavailable_action","unsupported"]\n'
         '  "patient_name": string or null\n'
         '  "report_type": one of ["OPG","PERIAPICAL","BITEWING","CBCT"] or null\n'
+        '  "info_fields": list of ["contact","dob","gender"] or null\n'
         '  "free_text": the original user text\n'
         "Intent rules:\n"
-        '- greeting: a salutation or small talk with no task request ("hi", "hello there")\n'
+        '- greeting: a salutation with no task request ("hi", "hello there", '
+        '"good morning")\n'
         '- assistant_identity: a question about who you are or which model powers you '
-        '(e.g. "Are you Gemini?", "Who are you?")\n'
+        '("Who are you?", "Are you Gemini?", "Are you an AI?")\n'
+        '- assistant_capabilities: a question about what you can do or which features '
+        'exist ("What can you do?", "What else can you do?", "How do you help?")\n'
+        '- about_app: a question about what Viscan AI / this application is or does '
+        '("What is Viscan AI?", "Tell me about this app")\n'
+        '- small_talk: harmless social chatter with no request for information or work '
+        '("tell me a joke", "how are you?", "thanks!", "bye")\n'
+        '- general_dental: general dental knowledge — how teeth, gums, conditions, '
+        'treatments or dental terms work IN GENERAL ("What is gingivitis?", "Why do my '
+        'gums bleed?", "Is a root canal painful?"). This is education about dentistry, '
+        'NOT about a patient and NOT about the open report; never classify it as '
+        'retrieve_report or follow_up.\n'
         "- retrieve_report: user wants to open/view/find a patient's radiology report "
         "(e.g. \"Rahul report\", \"open Rahul\")\n"
+        "- patient_info: user asks for a patient's demographic or contact details, such as "
+        "phone, email, address, date of birth, age or gender "
+        "(e.g. \"give me the contact details of this person\", \"what is Priya's "
+        "phone number?\"). This is NOT a request for a radiology report. Set "
+        "\"info_fields\" to the requested details from this list: \"contact\" "
+        "(phone/email/address/how to reach them), \"dob\" (date of birth/age) "
+        "and/or \"gender\"; use [\"contact\"] when the user does not specify.\n"
         "- dictation: user is dictating clinical findings to be structured\n"
         '- follow_up: user asks about the report currently open in the session '
-        '("Give me a summary", "What are the key findings?")\n'
-        '- unsupported: anything outside these tasks (general knowledge, coding help, chit-chat beyond greetings)\n'
+        '("Give me a summary", "What are the key findings?", "What does this OPG show?"). '
+        'Use the session context to decide follow_up (a report is open and the question '
+        'is about it) vs retrieve_report.\n'
+        '- unavailable_action: user asks the app to PERFORM an action it cannot: booking '
+        'or scheduling a scan/appointment, cancelling or rescheduling, sending or '
+        'emailing a report, deleting records, referrals, payments. These are NOT '
+        'retrieve_report requests, even when a patient name follows ("book a scan for '
+        'Priya"). Retrieving reports, answering questions about an open report, '
+        'patient contact lookup, dictation structuring and draft export ARE implemented '
+        'and must not use this intent.\n'
+        '- unsupported: requests outside these tasks (writing poems, code, essays, or '
+        'general non-dental knowledge)\n'
         "Rules:\n"
-        "- Extract patient_name ONLY when the user actually wrote it — never invent a name.\n"
+        "- Extract patient_name ONLY when the user actually wrote it; never invent a name.\n"
+        "- Never classify a greeting, joke, identity/capabilities/app question, general "
+        "dental question, or unimplemented action as retrieve_report or follow_up.\n"
         "- Use the session context to decide follow_up (a report is open) vs retrieve_report.\n"
         "Output ONLY valid JSON, no explanation."
         + ctx_str
@@ -649,12 +1034,12 @@ def interpret_query(text: str, session_context: Optional[dict] = None) -> Interp
     try:
         raw = _call_llm(system, text)
     except Exception as exc:
-        # Provider error (network, auth, rate limit…) — deterministic fallback
+        # Provider error (network, auth, rate limit…): deterministic fallback
         logger.warning(
-            "chat: %s call failed (%s) — deterministic fallback used",
+            "chat: %s call failed (%s); deterministic fallback used",
             provider, _describe_llm_error(exc),
         )
-        result = _demo_interpret_query(text)
+        result = _demo_interpret_query(text, session_context)
         result.free_text = text
         result.fallback_reason = f"AI provider unavailable ({type(exc).__name__}); used deterministic interpretation"
         return result
@@ -670,22 +1055,27 @@ def interpret_query(text: str, session_context: Optional[dict] = None) -> Interp
         #   is dropped, so retrieval can never target a fabricated identity
         if parsed.patient_name and not _name_in_text(parsed.patient_name, text):
             logger.warning(
-                "chat: %s returned a patient name absent from the user text — dropped",
+                "chat: %s returned a patient name absent from the user text; dropped",
                 provider,
             )
             parsed.patient_name = None
+        # - conversation intents never target a record, whatever the model
+        #   thought it saw in the text
+        if parsed.intent in NON_PATIENT_INTENTS:
+            parsed.patient_name = None
+            parsed.info_fields = None
         # - a name with no explicit verb is a retrieval request
         if parsed.intent == "unknown" and parsed.patient_name:
             parsed.intent = "retrieve_report"
         logger.info(
-            "chat: classified via %s — intent=%s patient=%s report_type=%s",
+            "chat: classified via %s; intent=%s patient=%s report_type=%s",
             provider, parsed.intent, parsed.patient_name, parsed.report_type,
         )
         return parsed
     except Exception:
-        # LLM returned invalid output — fall back deterministically
-        logger.warning("chat: %s returned malformed output — deterministic fallback used", provider)
-        result = _demo_interpret_query(text)
+        # LLM returned invalid output; fall back deterministically
+        logger.warning("chat: %s returned malformed output; deterministic fallback used", provider)
+        result = _demo_interpret_query(text, session_context)
         result.free_text = text
         result.fallback_reason = "AI returned malformed output; used deterministic interpretation"
         return result
@@ -711,10 +1101,10 @@ def _fallback_dictation(
     """
     return StructuredDictation(
         findings=[{"observation": clinical[:500], "site": "see transcript", "severity": "unspecified"}],
-        anatomical_site="Could not parse — review required",
+        anatomical_site="Could not parse: review required",
         draft_report=(
             "CLINICAL DICTATION DRAFT\n\n"
-            f"[{reason} — manual transcription required]\n\n"
+            f"[{reason}: manual transcription required]\n\n"
             f"Original transcript:\n{clinical}"
         ),
         uncertainties=[reason, "Manual review required"],
@@ -738,15 +1128,93 @@ def _no_clinical_findings_result(
         draft_report=(
             "CLINICAL DICTATION DRAFT\n\n"
             "[No clinical findings detected in the transcript.]\n\n"
-            "Only header/metadata lines were provided — no clinical narrative "
+            "Only header/metadata lines were provided; no clinical narrative "
             "to structure. Dictate your observations and submit again."
         ),
-        uncertainties=["No clinical findings detected — only header/metadata lines provided"],
+        uncertainties=["No clinical findings detected; only header/metadata lines provided"],
         requires_review=True,
         fallback_reason="No clinical findings detected in the transcript (not AI-structured)",
         metadata=metadata,
         transcript=transcript,
+        usable=False,   # nothing clinical to structure → no savable draft
     )
+
+
+def _has_clinical_signal(text: str) -> bool:
+    """
+    Deterministic usability gate for a dictation transcript.
+
+    True only when the text carries vocabulary that genuinely belongs to a
+    dental radiology dictation (site, tooth, finding, symptom, severity or
+    imaging terms). A transcript without any of it (a stray question, typos,
+    voice-input noise such as "what the dark report for 2:36@") is not a
+    dictation and must never be turned into an editable, savable draft.
+    """
+    return _CLINICAL_SIGNAL_RE.search(text) is not None
+
+
+def _unusable_transcript_result(
+    transcript: str,
+    metadata: dict[str, str],
+    reason: str,
+) -> StructuredDictation:
+    """
+    Honest result for a transcript with no usable clinical content: no
+    findings, NO draft (so nothing can be edited or saved), and explicit
+    guidance to dictate the observation and submit again.
+    """
+    return StructuredDictation(
+        findings=[],
+        anatomical_site="Not determinable: transcript not clinically usable",
+        draft_report="",
+        uncertainties=[
+            reason,
+            (
+                "Dictate a clinical observation (site or tooth, finding, severity) "
+                "and submit again. Nothing was drafted from this transcript."
+            ),
+        ],
+        requires_review=True,
+        fallback_reason=reason,
+        usable=False,
+        metadata=metadata,
+        transcript=transcript,
+    )
+
+
+def _deterministic_structuring_fallback(
+    clinical: str,
+    metadata: dict,
+    transcript: str,
+    reason: str,
+) -> StructuredDictation:
+    """
+    Honest last resort when the AI produced no usable findings for a transcript
+    that DOES contain clinical narrative: structure that narrative
+    deterministically (every observation stays verbatim from the transcript,
+    nothing is invented) and label the result with the real reason it is not
+    AI-structured. Unlike `_no_clinical_findings_result`, this never claims the
+    input was header/metadata only, which would be false here.
+    """
+    result = _demo_structure_dictation(clinical)
+    result = _apply_metadata_finding_guard(result)
+    if not result.findings:
+        # Nothing extractable at all (e.g. duplicate header lines only).
+        return _no_clinical_findings_result(transcript, metadata)
+    result.fallback_reason = reason
+    result.uncertainties = [
+        reason,
+        "Deterministic (non-AI) structuring; observations are quoted verbatim "
+        "from the transcript and were not interpreted",
+        "All fields unverified, clinician confirmation required",
+    ]
+    result.draft_report = result.draft_report.replace(
+        "[DEMO MODE: deterministic parser, no AI interpretation]",
+        f"[{reason}]",
+    )
+    result.metadata = metadata
+    result.transcript = transcript
+    return result
 
 
 _GROUND_STOPWORDS = {
@@ -789,7 +1257,7 @@ def _is_grounded(observation: str, transcript_tokens: set[str], transcript_norm:
         return False
     sig = _significant_tokens(observation)
     if not sig:
-        # Degenerate case (all filler) — fall back to substring containment.
+        # Degenerate case (all filler): fall back to substring containment.
         return obs_norm in transcript_norm
     matched = sum(1 for t in sig if t in transcript_tokens)
     return matched >= 1 and (matched / len(sig)) >= 0.5
@@ -842,13 +1310,20 @@ def structure_dictation(transcript: str) -> StructuredDictation:
 
     Pipeline:
       1. Header/metadata lines (`name:`, `dob:`, `tooth:`, …) are split off
-         FIRST — they are never sent to the model or the demo parser, and are
+         FIRST: they are never sent to the model or the demo parser, and are
          echoed back as `metadata`.
       2. Metadata-only input short-circuits to an explicit "no clinical
          findings detected" result (marked as NOT AI-structured).
-      3. The clinical text is structured (Gemini when configured, otherwise
-         the deterministic demo parser).
-      4. Deterministic safety passes: token-overlap grounding drops unsupported
+      3. A transcript with no clinical vocabulary at all (noise, an unrelated
+         question) short-circuits to an unusable result: no findings, no draft,
+         nothing savable; the same verdict can also come from the model
+         itself via `"usable": false`.
+      4. The clinical text is structured (Gemini when configured, otherwise
+         the deterministic demo parser), with historical and current findings
+         kept separate. An empty AI findings list triggers one corrective
+         retry, then deterministic structuring of the same clinical text,
+         never a bogus "no findings" result.
+      5. Deterministic safety passes: token-overlap grounding drops unsupported
          findings (visible in uncertainties), metadata-shaped findings are
          dropped, and the review gate is always forced on.
     """
@@ -856,11 +1331,19 @@ def structure_dictation(transcript: str) -> StructuredDictation:
 
     # Metadata-only input → explicit, honest, non-AI result.
     if not clinical:
-        logger.info("dictation: header/metadata-only transcript — explicit no-findings result (no LLM call)")
+        logger.info("dictation: header/metadata-only transcript; explicit no-findings result (no LLM call)")
         return _no_clinical_findings_result(transcript, metadata)
 
+    # Usability gate (demo and live alike, before any LLM call): a transcript
+    # with no clinical vocabulary at all is not a dictation, so it gets no
+    # findings, no draft and nothing savable. Only guidance to try again.
+    if not _has_clinical_signal(clinical):
+        reason = "No clinical content detected in the transcript; nothing to structure"
+        logger.info("dictation: transcript carries no clinical signals; no draft produced (no LLM call)")
+        return _unusable_transcript_result(transcript, metadata, reason)
+
     if DEMO_MODE:
-        logger.info("dictation: demo mode (no LLM call) — deterministic structuring")
+        logger.info("dictation: demo mode (no LLM call); deterministic structuring")
         result = _demo_structure_dictation(clinical)
         result.metadata = metadata
         result.transcript = transcript
@@ -868,46 +1351,113 @@ def structure_dictation(transcript: str) -> StructuredDictation:
 
     system = (
         "You are a dental radiology assistant. A clinician has dictated findings. "
-        "Your task: extract and structure ONLY what was stated. "
+        "Your task: extract and structure EVERY clinical statement in the dictation. "
         "NEVER invent or infer clinical observations not explicitly mentioned.\n\n"
         "Output ONLY a JSON object with:\n"
-        '  "findings": list of {"site": str, "observation": str, "severity": "none"|"mild"|"moderate"|"severe"}\n'
+        '  "findings": list of {"site": str, "observation": str, '
+        '"severity": "none"|"mild"|"moderate"|"severe", '
+        '"context": "historical"|"current"}\n'
         '  "anatomical_site": string summarising the primary region\n'
         '  "draft_report": a professional radiological report draft\n'
         '  "uncertainties": list of strings where the dictation was unclear or incomplete\n'
+        '  "usable": true when the text is an actual clinical dictation, false otherwise\n'
         '  "requires_review": true (always set this to true)\n\n'
         "Rules:\n"
+        '- Set "usable": false ONLY when the text contains no clinical observations at '
+        '  all (gibberish, an unrelated question, small talk or stray voice input). In '
+        "  that case return an empty \"findings\" list, an empty \"draft_report\" and "
+        '  "usable": false; never turn non-clinical text into a report draft, however '
+        "  uncertain it is.\n"
         "- Convey each observation faithfully using the words from the dictation; "
         "  you may tidy phrasing, but do NOT add, infer, or embellish clinical facts.\n"
+        "- Structure historical findings too. When the dictation reports what a PREVIOUS "
+        "  examination (e.g. a prior OPG or CBCT) documented, keep each prior finding as "
+        '  its own entry with "context": "historical", naming the prior study/date in the '
+        '  observation. Statements about the examination being performed now get '
+        '"context": "current". Never merge a historical finding with a current one.\n'
+        '- The findings list must NEVER be empty when the dictation contains clinical '
+        "  statements. This includes dictations that only say no new findings are "
+        '  available for the current exam: record that statement itself as a finding '
+        'with severity "none" and context "current", alongside the historical findings.\n'
+        "- Never claim a condition has improved, worsened, or remained unchanged unless "
+        "  the dictation says so; never invent measurements, diagnoses, or treatment "
+        "  recommendations.\n"
+        "- Follow any instruction the dictation gives about how the report should be "
+        "  written (e.g. separating historical from current findings, stating that "
+        "  current findings require radiographic assessment and clinician review).\n"
         "- If the dictation is unclear, add the unclear point to uncertainties.\n"
         "- Do not add clinical conclusions not present in the dictation.\n"
         "- The draft_report must begin with the phrase 'CLINICAL DICTATION DRAFT'.\n"
-        "- Write the draft as a short professional report with a FINDINGS heading\n"
-        "  listing the observations, and end with a 'REVIEW STATUS:' line stating\n"
-        "  that clinician confirmation is required before use.\n"
+        "- Write the draft as a short professional report with a FINDINGS heading that\n"
+        "  separates HISTORICAL FINDINGS (prior studies) from CURRENT OBSERVATIONS,\n"
+        "  and end with a 'REVIEW STATUS:' line stating that clinician confirmation is\n"
+        "  required before use.\n"
         "- Output ONLY valid JSON, no explanation."
     )
 
-    provider = _provider_name()
-    try:
-        raw = _call_llm(system, clinical)
-    except Exception as exc:
-        logger.warning(
-            "dictation: %s call failed (%s) — safe fallback used",
-            provider, _describe_llm_error(exc),
-        )
-        reason = f"AI provider unavailable ({_describe_llm_error(exc)})"
-        return _fallback_dictation(clinical, reason, metadata, transcript)
+    # Corrective nudge appended when the model answers with zero findings for a
+    # transcript that plainly contains clinical narrative (common for follow-up
+    # dictations that merely state "no new findings" while carrying prior-exam
+    # findings).
+    empty_nudge = (
+        "\n\nREMINDER: the dictation above DOES contain clinical statements, so "
+        '"findings" must not be empty. Structure every statement it contains: '
+        'prior-examination findings as "historical", statements about the current '
+        'examination as "current"; and when the dictation says no new findings are '
+        'available, record that as a finding with severity "none" instead of '
+        "returning an empty list."
+    )
 
-    try:
-        data = _parse_llm_json(raw)
-        structured = StructuredDictation(**data)
-    except Exception:
-        # Validation failed — return safe fallback
-        logger.warning("dictation: %s output failed validation — safe fallback used", provider)
-        return _fallback_dictation(
-            clinical, "AI output failed validation", metadata, transcript
+    provider = _provider_name()
+    structured: Optional[StructuredDictation] = None
+    for attempt in range(2):
+        prompt = system + (empty_nudge if attempt else "")
+        try:
+            raw = _call_llm(prompt, clinical)
+        except Exception as exc:
+            logger.warning(
+                "dictation: %s call failed (%s); safe fallback used",
+                provider, _describe_llm_error(exc),
+            )
+            reason = f"AI provider unavailable ({_describe_llm_error(exc)})"
+            return _fallback_dictation(clinical, reason, metadata, transcript)
+
+        try:
+            candidate = StructuredDictation(**_parse_llm_json(raw))
+        except Exception:
+            # Validation failed: return safe fallback
+            logger.warning("dictation: %s output failed validation; safe fallback used", provider)
+            return _fallback_dictation(
+                clinical, "AI output failed validation", metadata, transcript
+            )
+
+        if not candidate.usable:
+            # Belt and braces with the deterministic gate: either signal alone
+            # suppresses the draft, so noise can never become a savable report.
+            logger.info("dictation: %s marked the transcript unusable; no draft produced", provider)
+            return _unusable_transcript_result(
+                transcript,
+                metadata,
+                "The AI found no clinical observations in this transcript; nothing to structure",
+            )
+        if candidate.findings:
+            structured = candidate
+            break
+        logger.warning(
+            "dictation: %s returned an empty findings list (attempt %d of 2)",
+            provider, attempt + 1,
         )
+
+    if structured is None:
+        # The model parsed cleanly but found nothing to structure in a transcript
+        # that DOES contain clinical narrative. Never mislabel that as
+        # "metadata only": structure it deterministically instead.
+        reason = (
+            "AI returned no findings for a transcript containing clinical text; "
+            "used deterministic structuring"
+        )
+        logger.warning("dictation: %s yielded no findings; %s", provider, reason)
+        return _deterministic_structuring_fallback(clinical, metadata, transcript, reason)
 
     # ── Deterministic safety pass (LLM output never reaches the client raw) ──
     kept, dropped = _ground_findings(clinical, structured.findings)
@@ -930,12 +1480,17 @@ def structure_dictation(transcript: str) -> StructuredDictation:
     # No-name-as-finding: drop any metadata-shaped finding the model echoed.
     structured = _apply_metadata_finding_guard(structured)
 
-    # Empty-findings safety net: never echo raw gibberish as a "draft".
+    # Empty-findings safety net: never echo raw gibberish as a "draft", and
+    # never claim "metadata only" when the transcript had clinical narrative.
     if not structured.findings:
-        logger.warning("dictation: no grounded findings survived %s output — explicit no-findings result", provider)
-        return _no_clinical_findings_result(transcript, metadata)
+        reason = "AI output contained no usable findings after safety checks"
+        logger.warning(
+            "dictation: no grounded findings survived %s output; deterministic structuring used",
+            provider,
+        )
+        return _deterministic_structuring_fallback(clinical, metadata, transcript, reason)
 
-    logger.info("dictation: structured via %s — %d finding(s)", provider, len(structured.findings))
+    logger.info("dictation: structured via %s; %d finding(s)", provider, len(structured.findings))
 
     for item in structured.findings:
         item.setdefault("site", "unspecified")
@@ -948,10 +1503,10 @@ def structure_dictation(transcript: str) -> StructuredDictation:
         structured.draft_report = (
             f"{structured.draft_report.rstrip()}\n\n"
             "REVIEW STATUS: Requires clinician confirmation before use. "
-            "Not finalised — do not save automatically."
+            "Not finalised. Do not save automatically."
         )
     if not structured.uncertainties:
-        structured.uncertainties = ["AI-structured output — clinician verification required"]
+        structured.uncertainties = ["AI-structured output: clinician verification required"]
     # Provenance: genuinely AI-structured → no fallback_reason.
     structured.metadata = metadata
     structured.transcript = transcript
@@ -982,7 +1537,7 @@ def answer_follow_up(question: str, report: dict, session_context: Optional[dict
     Never answers beyond what the report contains.
     """
     if DEMO_MODE:
-        logger.info("follow-up: demo mode (no LLM call) — deterministic answer for report %s", report.get("id"))
+        logger.info("follow-up: demo mode (no LLM call); deterministic answer for report %s", report.get("id"))
         return {
             "answer": (
                 f"[DEMO MODE] Answering based on report {report.get('id','?')} "
@@ -1020,7 +1575,7 @@ def answer_follow_up(question: str, report: dict, session_context: Optional[dict
         raw = _call_llm(system, question)
     except Exception as exc:
         logger.warning(
-            "follow-up: %s call failed (%s) — deterministic evidence fallback used for report %s",
+            "follow-up: %s call failed (%s); deterministic evidence fallback used for report %s",
             provider, _describe_llm_error(exc), report.get("id"),
         )
         return {
@@ -1046,7 +1601,7 @@ def answer_follow_up(question: str, report: dict, session_context: Optional[dict
         grounded = _ground_evidence(report, [str(e) for e in evidence])
         if not grounded:
             logger.warning(
-                "follow-up: %s evidence not found in report %s — replaced with the report's own findings",
+                "follow-up: %s evidence not found in report %s; replaced with the report's own findings",
                 provider, report.get("id"),
             )
             grounded = [f.get("observation", "") for f in report.get("findings", [])]
@@ -1057,10 +1612,133 @@ def answer_follow_up(question: str, report: dict, session_context: Optional[dict
             "source_report_id": report.get("id"),
         }
     except Exception:
-        logger.warning("follow-up: %s output failed validation — evidence fallback used for report %s", provider, report.get("id"))
+        logger.warning("follow-up: %s output failed validation; evidence fallback used for report %s", provider, report.get("id"))
         return {
             "answer": f"Unable to process follow-up (AI validation failed). Report impression: {report.get('impression','')}",
             "source_report_id": report.get("id"),
             "evidence": [f.get("observation", "") for f in report.get("findings", [])],
             "error": "llm_output_invalid",
         }
+
+
+# ---------------------------------------------------------------------------
+# General dental knowledge (educational, never patient-specific)
+# ---------------------------------------------------------------------------
+
+# Appended deterministically so the "general education, not a finding, not a
+# diagnosis" framing holds even if the model's own wording drifts.
+GENERAL_DENTAL_EDUCATION_NOTE = (
+    "\n\n(General educational information about dental health — not a diagnosis, "
+    "not personalized treatment advice, and not based on any patient's report. "
+    "Only a dentist or clinician who examines you or the patient can advise on "
+    "an individual case.)"
+)
+
+
+def _extract_answer_text(raw: str) -> Optional[str]:
+    """Pull the prose answer out of a model response.
+
+    Accepts either plain prose (what the education prompt asks for) or a JSON
+    object carrying an "answer" field (what a classification-shaped response
+    looks like). Returns None when the response carries no usable answer —
+    e.g. another intent-classification object — so unusable model output can
+    never be shown to the user as dental guidance.
+    """
+    if not raw or not raw.strip():
+        return None
+    try:
+        data = _parse_llm_json(raw)
+    except Exception:
+        text = raw.strip()
+        if text.startswith("```"):          # tolerate a stray markdown fence
+            text = re.sub(r"^```[A-Za-z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        return text.strip() or None
+    answer = data.get("answer")
+    if isinstance(answer, str) and answer.strip():
+        return answer.strip()
+    return None
+
+
+def answer_general_dental(
+    question: str, provider_error: Optional[str] = None
+) -> str:
+    """
+    Answer a GENERAL dental question as educational information.
+
+    Gemini (when configured) writes the explanation under a system prompt that
+    forbids diagnoses, personalized treatment advice and any reference to
+    patient records; the deterministic education note is appended here so the
+    separation from patient-specific findings is explicit in every reply.
+
+    Without a provider (demo mode, or the interpretation call already failed)
+    nothing is invented: the reply says plainly that no explanation can be
+    generated right now.
+    """
+    question = " ".join((question or "").split())[:300]
+
+    if provider_error:
+        # The provider already failed once for this request; don't make the
+        # user wait for a second doomed call.
+        return (
+            "I couldn't reach the AI service right now, so I can't generate an "
+            f"explanation for your dental question (\"{question}\"). Nothing was "
+            "looked up or invented. Please try again in a moment — or ask me a "
+            "question about an open report, which I answer from that report "
+            "itself." + GENERAL_DENTAL_EDUCATION_NOTE
+        )
+
+    if DEMO_MODE:
+        return (
+            "That's a general dental question, and it would be answered as "
+            f"general education only (\"{question}\") — clearly separate from any "
+            "patient's findings. This session has no AI service configured, so I "
+            "can't generate that explanation right now rather than make one up. "
+            "For advice about your own teeth or a specific patient, please consult "
+            "a dentist; I can still answer questions about an open report."
+            + GENERAL_DENTAL_EDUCATION_NOTE
+        )
+
+    system = (
+        "You are Viscan AI's dental education assistant. Answer the user's GENERAL "
+        "dental question with accurate, plain-language educational information "
+        "(one short paragraph).\n"
+        "Rules:\n"
+        "- This is general education, NOT a diagnosis and NOT personalized "
+        "treatment advice. Never tell the user what they (or any patient) have, "
+        "and never prescribe or recommend a specific treatment.\n"
+        "- Do not reference, assume or invent any patient, report or clinical "
+        "record; none has been provided to you.\n"
+        "- Wherever there is medical uncertainty, say what is generally known and "
+        "that a dentist or clinician should assess the individual case.\n"
+        "- Never invent statistics, citations or study results.\n"
+        "- If the question is really about a specific patient's report, say that "
+        "report questions are answered from the report open in the app.\n"
+        "- Plain text only: no JSON, no markdown headings."
+    )
+
+    provider = _provider_name()
+    try:
+        raw = _call_llm(system, question)
+    except Exception as exc:
+        logger.warning(
+            "general-dental: %s call failed (%s); no answer generated",
+            provider, _describe_llm_error(exc),
+        )
+        return (
+            f"I couldn't reach the AI service ({_describe_llm_error(exc)}), so I "
+            f"can't explain \"{question}\" right now. Nothing was invented. "
+            "Please try again shortly." + GENERAL_DENTAL_EDUCATION_NOTE
+        )
+
+    answer = _extract_answer_text(raw)
+    if not answer:
+        logger.warning("general-dental: %s returned no usable answer", provider)
+        return (
+            "The AI returned an unusable response, so I don't have a reliable "
+            f"explanation for \"{question}\" to give you. Nothing was invented. "
+            "Please try again." + GENERAL_DENTAL_EDUCATION_NOTE
+        )
+
+    logger.info("general-dental: answered via %s", provider)
+    return answer + GENERAL_DENTAL_EDUCATION_NOTE
