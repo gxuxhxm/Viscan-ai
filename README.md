@@ -1,5 +1,9 @@
 # Viscan AI — AI-Engineered Dental Reporting Assistant
 
+![](./docs/screenshots/home-empty-state.png)
+
+![](./docs/screenshots/report-with-ai-summary.png)
+
 Viscan AI is an **AI-engineered dental reporting assistant**: Google Gemini interprets the clinician's free text (intent recognition + entity extraction), structures clinical dictation into validated report drafts, and answers report-aware questions with quoted evidence. It covers the three mandated workflows — **patient report retrieval**, **clinical dictation → draft report**, and **context-dependent conversational follow-up** — plus a bonus **report-aware chatbot**. Voice input is built in, and a deterministic offline path keeps every workflow runnable with zero API keys.
 
 **Stack:** React 19 + Vite + Tailwind CSS v4 (frontend) · Python + FastAPI + Pydantic (backend) · **Google Gemini** as the primary LLM engine · OpenAI as a secondary provider · deterministic verification guardrails plus an offline path so the app still runs with zero keys.
