@@ -145,6 +145,11 @@ class QueryResponse(BaseModel):
     # the LLM (or demo heuristics); set → the LLM failed and deterministic
     # fallback interpretation was used.
     fallback_reason: Optional[str] = None
+    # Set when the request was recognised but this app deliberately does not
+    # serve it (a safety refusal, or a read-only lookup the records cannot
+    # answer). It is a complete, honest answer shown verbatim; it never implies
+    # that anything was looked up, changed or completed.
+    limitation: Optional[str] = None
 
 class DictationResponse(BaseModel):
     findings: list[Any]

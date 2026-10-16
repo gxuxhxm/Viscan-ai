@@ -361,10 +361,79 @@ def save_report(req: SaveReportRequest):
 
 # ── Patient info (contact / demographic lookup) ─────────────────────────────
 
-_PATIENT_INFO_LABELS = {"contact": "contact", "dob": "date of birth", "gender": "gender/age"}
+# Details the patient schema can answer. Anything else a user asks for is
+# named back honestly instead of being guessed at.
+_PATIENT_INFO_LABELS = {
+    "contact": "contact", "dob": "date of birth", "gender": "gender/age",
+    "address": "address",
+}
+
+# Details this schema does not store (patients.json holds name, dob, gender,
+# phone, email only). They are surfaced to the user as "not recorded".
+_UNSTORED_LABELS = {
+    "blood group": "blood group", "blood type": "blood type", "allergies": "allergies",
+    "allergy": "allergy", "medications": "medications", "medication": "medication",
+    "medical history": "medical history", "insurance": "insurance",
+    "emergency contact": "emergency contact", "next of kin": "next of kin",
+    "occupation": "occupation", "weight": "weight", "height": "height",
+    "blood pressure": "blood pressure", "notes": "notes", "prescription": "prescription",
+}
+
+# The interpreter prompt tells the LLM to use the USER'S OWN WORDING for
+# info_fields ("phone number", "e-mail", "how old"), so the labels reaching
+# _format_patient_info are free text, not schema keys. Normalising them here
+# keeps a stored value from being reported as missing just because the label
+# differed ("phone number" ≠ "contact"): every recognised synonym maps onto the
+# canonical field that can actually answer it. Unrecognised labels pass through
+# unchanged and are answered honestly as "not recorded".
+_INFO_FIELD_ALIASES = {
+    # how to reach the patient → the contact block (phone + email)
+    "contact": "contact", "contact details": "contact", "contact information": "contact",
+    "contact info": "contact", "phone": "contact", "phone number": "contact",
+    "telephone": "contact", "tel": "contact", "mobile": "contact",
+    "mobile number": "contact", "cell": "contact", "cell phone": "contact",
+    "email": "contact", "e-mail": "contact", "email address": "contact",
+    "e-mail address": "contact", "mail": "contact", "reach": "contact",
+    # demographics the record holds
+    "address": "address", "home address": "address", "mailing address": "address",
+    "residential address": "address", "postal address": "address",
+    "dob": "dob", "date of birth": "dob", "d.o.b.": "dob", "birth date": "dob",
+    "birthday": "dob",
+    # age is derived from the stored dob and rendered with gender (demo parity)
+    "gender": "gender", "sex": "gender", "age": "gender", "how old": "gender",
+}
 
 
-_INFO_SUMMARY_FIELDS = ("id", "name", "dob", "gender", "phone", "email")
+def _normalize_info_fields(info_fields: Optional[list[str]]) -> list[str]:
+    """Map free-form detail labels onto canonical, record-answerable fields.
+    Case/whitespace-insensitive; duplicates collapse; unknown labels (the
+    user's wording for something the schema never stores) pass through so the
+    caller can answer 'not recorded' instead of guessing."""
+    normalized: list[str] = []
+    for field in info_fields or []:
+        if not isinstance(field, str) or not field.strip():
+            continue
+        key = " ".join(field.casefold().split())
+        canonical = _INFO_FIELD_ALIASES.get(key)
+        if canonical is None and key not in _UNSTORED_LABELS and "emergency" not in key:
+            # Wordy variants the exact table may miss ("phone no.", "email id",
+            # "postal address"). Details the schema never stores are excluded
+            # above, so this can only ever route to a field that can answer.
+            if re.search(r"\b(?:address|postal)\b", key):
+                canonical = "address"
+            elif re.search(r"\b(?:d\.?o\.?b\.?|birthday|birth)\b", key):
+                canonical = "dob"
+            elif re.search(r"\b(?:gender|sex|age|how\s+old)\b", key):
+                canonical = "gender"
+            elif re.search(r"\b(?:phone|mobile|cell|telephone|email|e-mail|mail|contact)\b", key):
+                canonical = "contact"
+        label = canonical if canonical is not None else field
+        if label not in normalized:
+            normalized.append(label)
+    return normalized
+
+
+_INFO_SUMMARY_FIELDS = ("id", "name", "dob", "gender", "phone", "email", "address")
 
 
 def _info_summary(patient: dict) -> PatientSummary:
@@ -421,13 +490,13 @@ def _resolve_patient_for_info(
 
 def _format_patient_info(patient: dict, info_fields: Optional[list[str]]) -> str:
     """Render the requested on-file details. Only ever shows what the record
-    actually holds; a field with no value is omitted (never fabricated)."""
-    requested = [f for f in (info_fields or ["contact"]) if f in _PATIENT_INFO_LABELS]
-    if not requested:
-        requested = ["contact"]
+    actually holds; a field with no value is named as not recorded rather than
+    being substituted by a different detail or guessed at."""
+    requested = _normalize_info_fields(info_fields) or ["contact"]
 
     lines = [f"{patient['name']} ({patient['id']}): details on file:"]
     shown = False
+    unstored: list[str] = []
     for field in requested:
         if field == "contact":
             phone, email = patient.get("phone"), patient.get("email")
@@ -436,6 +505,11 @@ def _format_patient_info(patient: dict, info_fields: Optional[list[str]]) -> str
                 shown = True
             if email:
                 lines.append(f"• Email: {email}")
+                shown = True
+        elif field == "address":
+            address = patient.get("address")
+            if address:
+                lines.append(f"• Address: {address}")
                 shown = True
         elif field == "dob":
             dob = patient.get("dob")
@@ -447,11 +521,35 @@ def _format_patient_info(patient: dict, info_fields: Optional[list[str]]) -> str
             if gender:
                 lines.append(f"• Gender: {gender}")
                 shown = True
+            # Age is derived from the stored date of birth, never invented.
+            dob = patient.get("dob")
+            if dob:
+                try:
+                    y, m, _ = dob.split("-")
+                    today = date.today()
+                    age = today.year - int(y) - (
+                        (today.month, today.day) < (int(m), int(_))
+                    )
+                    lines.append(f"• Age: {age}")
+                    shown = True
+                except ValueError:
+                    pass
+        elif field in _UNSTORED_LABELS:
+            unstored.append(_UNSTORED_LABELS[field])
+        else:
+            unstored.append(field)
 
-    if not shown:
+    if unstored:
+        labels = ", ".join(unstored)
+        lines.append(
+            f"{patient['name']} ({patient['id']}) has no {labels} recorded in "
+            "this system, so I can't provide it — I won't guess."
+        )
+
+    if not shown and not unstored:
+        labels = "/".join(_PATIENT_INFO_LABELS.get(f, f) for f in requested)
         return (
-            f"{patient['name']} ({patient['id']}) has no "
-            f"{'/'.join(_PATIENT_INFO_LABELS[f] for f in requested)} details on file."
+            f"{patient['name']} ({patient['id']}) has no {labels} details on file."
         )
     return "\n".join(lines)
 
@@ -509,9 +607,66 @@ def query_endpoint(req: QueryRequest):
         # nothing happened — never claim an action was completed.
         message = UNAVAILABLE_ACTION_MESSAGE.format(action=_truncate(req.text, 160))
     elif intent in ("unsupported", "unknown"):
-        # When the LLM was unavailable, say so clearly instead of pretending
+        # A recognised request the app deliberately does not serve (a safety
+        # refusal, or a read-only lookup the records cannot answer) is answered
+        # verbatim; otherwise the LLM outage is explained instead of pretending
         # the message was an unrecognised report command.
-        message = LLM_FALLBACK_MESSAGE if fallback_reason else UNSUPPORTED_MESSAGE
+        if interpreted.limitation:
+            message = interpreted.limitation
+            explains_outage = True
+        else:
+            message = LLM_FALLBACK_MESSAGE if fallback_reason else UNSUPPORTED_MESSAGE
+    elif intent == "report_count":
+        # Read-only count of a patient's reports, computed from the records.
+        # Never a report-opening request: nothing is fetched, opened or implied.
+        if not patient_name:
+            message = (
+                "I need a patient name to count their reports. Try something like "
+                "\"How many reports does Priya Sharma have?\"."
+            )
+        else:
+            status, matches = resolve_patient_name(patient_name)
+
+            def _summaries(cs: list[dict]) -> list[PatientSummary]:
+                counts = _patient_report_counts()
+                summaries = []
+                for c in cs:
+                    clean = {k: v for k, v in c.items() if not k.startswith("_")}
+                    summaries.append(
+                        PatientSummary(**{**clean, "report_count": counts.get(clean.get("id"), 0)})
+                    )
+                return summaries
+
+            if status == "none":
+                from services.retrieval import _load_patients
+                known = ", ".join(p["name"] for p in _load_patients())
+                message = (
+                    f"No patient found matching '{patient_name}' in this clinic's records. "
+                    f"I only count patients that actually exist, so I won't invent one. "
+                    f"Known patients: {known}. Please check the name and try again."
+                )
+            elif status == "ambiguous":
+                ambiguous = True
+                matched_patients = _summaries(matches[:4])
+                message = (
+                    f"Multiple patients match '{patient_name}'. "
+                    "Please select the correct patient from the list."
+                )
+            else:
+                patient = matches[0]
+                matched_patients = _summaries([patient])
+                total = len(get_reports_for_patient(patient["id"], report_type))
+                if report_type:
+                    noun = f"{report_type} report" if report_type else "report"
+                    if total == 0:
+                        message = f"{patient['name']} ({patient['id']}) has no {noun}s on file."
+                    else:
+                        message = f"{patient['name']} ({patient['id']}) has {total} {noun}s on file."
+                else:
+                    if total == 0:
+                        message = f"{patient['name']} ({patient['id']}) has no reports on file."
+                    else:
+                        message = f"{patient['name']} ({patient['id']}) has {total} reports on file."
     elif intent == "retrieve_report":
         if not patient_name:
             message = "I couldn't identify a patient name in your request. Please specify the patient's name."
@@ -606,6 +761,7 @@ def query_endpoint(req: QueryRequest):
         demo_mode=DEMO_MODE,
         message=message,
         fallback_reason=fallback_reason,
+        limitation=interpreted.limitation,
     )
 
 

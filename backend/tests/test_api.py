@@ -749,3 +749,98 @@ def test_contact_details_demo_mode_no_llm():
     data = resp.json()
     assert data["intent"] == "patient_info"
     assert "priya.sharma@example.com" in data["message"]
+
+
+# ── info_fields arrive in the USER'S wording in live mode ────────────────────
+# The interpreter prompt tells the LLM to echo the user's own phrasing, so the
+# formatter must map free-text labels onto schema fields instead of treating an
+# unfamiliar label as "not recorded" (a false denial of stored data).
+
+def test_live_phone_number_wording_returns_stored_phone(monkeypatch):
+    """info_fields ["phone number"] must show the real stored phone, not claim
+    the phone is unrecorded."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({
+            "intent": "patient_info",
+            "patient_name": "Priya Sharma",
+            "info_fields": ["phone number"],
+        }),
+    )
+    data = client.post("/query", json={"text": "what is Priya Sharma's phone number?"}).json()
+    assert data["intent"] == "patient_info"
+    assert "+91-98765-43210" in data["message"]
+    assert "no phone number recorded" not in data["message"].lower()
+    assert "won't guess" not in data["message"].lower()
+
+
+def test_live_age_wording_derives_from_dob(monkeypatch):
+    """info_fields ["age"] is answerable from the stored dob, never 'not recorded'."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({
+            "intent": "patient_info",
+            "patient_name": "Priya Sharma",
+            "info_fields": ["age"],
+        }),
+    )
+    data = client.post("/query", json={"text": "how old is Priya Sharma?"}).json()
+    assert data["intent"] == "patient_info"
+    assert "Age:" in data["message"]
+    assert "not recorded" not in data["message"].lower()
+
+
+def test_live_unstored_detail_still_answered_honestly(monkeypatch):
+    """A detail the schema genuinely never stores is still reported missing —
+    normalisation must not start inventing values for it."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({
+            "intent": "patient_info",
+            "patient_name": "Priya Sharma",
+            "info_fields": ["blood group"],
+        }),
+    )
+    data = client.post("/query", json={"text": "what is Priya Sharma's blood group?"}).json()
+    assert data["intent"] == "patient_info"
+    assert "no blood group recorded" in data["message"].lower()
+    assert "+91-98765-43210" not in data["message"]   # never substitutes another detail
+
+
+def test_live_mixed_known_and_unknown_fields(monkeypatch):
+    """A known label and an unstored one in the same answer: show the stored
+    value and name the missing one — never drop either."""
+    llm_service = _force_live_mode(monkeypatch)
+    monkeypatch.setattr(
+        llm_service, "_call_llm",
+        lambda *a, **k: json.dumps({
+            "intent": "patient_info",
+            "patient_name": "Priya Sharma",
+            "info_fields": ["e-mail address", "allergies"],
+        }),
+    )
+    data = client.post("/query", json={"text": "Priya Sharma email and allergies"}).json()
+    assert data["intent"] == "patient_info"
+    assert "priya.sharma@example.com" in data["message"]
+    assert "no allergies recorded" in data["message"].lower()
+
+
+def test_format_patient_info_normalizes_and_dedupes():
+    """Direct unit check: synonym labels collapse onto one canonical field so a
+    stored phone is shown exactly once."""
+    import main as main_module
+    patient = {"id": "P001", "name": "Priya Sharma", "dob": "1988-03-15",
+               "gender": "F", "phone": "+91-98765-43210",
+               "email": "priya.sharma@example.com"}
+    out = main_module._format_patient_info(
+        patient, ["phone number", "Phone", "CONTACT DETAILS"]
+    )
+    assert out.count("+91-98765-43210") == 1
+    assert "has no" not in out.lower()           # answered from the record, not a "missing" fallback
+    assert "won't guess" not in out
+    # unknown wording passes through as an honest "not recorded"
+    out2 = main_module._format_patient_info(patient, ["phone number", "ziggo"])
+    assert "ziggo" in out2 and "won't guess" in out2
