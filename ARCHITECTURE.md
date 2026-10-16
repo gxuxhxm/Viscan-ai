@@ -1,12 +1,12 @@
-# Viscan AI — Architecture
+# Viscan AI - Architecture
 
 ## Overview
 
-Viscan AI is a three-panel dental reporting app (React + Vite) talking to a FastAPI backend, engineered around a single pipeline: **LLM interpretation → Pydantic schema validation → deterministic retrieval & business rules → grounded response.** Google Gemini (OpenAI as the configured alternative) does the interpreting — intent recognition, patient-name/report-type entity extraction, clinical-dictation structuring and report-aware question answering — while deterministic code owns everything that must be exact.
+Viscan AI is a three-panel dental reporting app (React + Vite) talking to a FastAPI backend, engineered around a single pipeline: **LLM interpretation → Pydantic schema validation → deterministic retrieval & business rules → grounded response.** Google Gemini (OpenAI as the configured alternative) does the interpreting - intent recognition, patient-name/report-type entity extraction, clinical-dictation structuring and report-aware question answering - while deterministic code owns everything that must be exact.
 
-The data boundary is explicit: **the LLM never has direct access to the data store.** Every record read/write goes through deterministic Python functions over local JSON (`services/retrieval.py`), every model output is Pydantic-validated and then re-checked against the source text, and the only report content that leaves the backend is prompt text the backend itself builds — for grounded follow-up answers, the selected report's relevant content (ids, findings, impression), with the answer's evidence re-verified against the stored report before it reaches the UI. With no API key configured the same pipeline stages are served by deterministic parsers (reported as `demo_mode: true`) — a resilience and testing path that never claims AI output.
+The data boundary is explicit: **the LLM never has direct access to the data store.** Every record read/write goes through deterministic Python functions over local JSON (`services/retrieval.py`), every model output is Pydantic-validated and then re-checked against the source text, and the only report content that leaves the backend is prompt text the backend itself builds - for grounded follow-up answers, the selected report's relevant content (ids, findings, impression), with the answer's evidence re-verified against the stored report before it reaches the UI. With no API key configured the same pipeline stages are served by deterministic parsers (reported as `demo_mode: true`) - a resilience and testing path that never claims AI output.
 
-Every stage is covered by automated tests: **210 total** — 183 backend (181 offline tests that can never spend a paid API call, plus **2 live Gemini API-call tests** that exercise the real provider end to end) and 27 frontend tests.
+Every stage is covered by automated tests: **210 total** - 183 backend (181 offline tests that can never spend a paid API call, plus **2 live Gemini API-call tests** that exercise the real provider end to end) and 27 frontend tests.
 
 ## System diagram
 
@@ -70,9 +70,9 @@ Every stage is covered by automated tests: **210 total** — 183 backend (181 of
                          └─────────────────┘
 ```
 
-The provider receives **prompt text only** — the user's message, or, for `/follow-up`, the selected report's relevant content that the backend chooses to put in the prompt. It has no credentials for, and no path to, `data/*.json`; all record I/O stays in `retrieval.py`.
+The provider receives **prompt text only** - the user's message, or, for `/follow-up`, the selected report's relevant content that the backend chooses to put in the prompt. It has no credentials for, and no path to, `data/*.json`; all record I/O stays in `retrieval.py`.
 
-Between model output and the UI sit two explicit stages: **Pydantic schema validation** (`models.py`) and the **Grounding & Safety Validation** box — transcript grounding (token overlap), severity downgrade, follow-up evidence re-check, invented-name and unsafe-request guards, provider-failure fallback, and the forced review gate. Only validated, grounded, labelled output is returned to the browser; this is verification of what the model produced, not a guarantee that a model can never be wrong.
+Between model output and the UI sit two explicit stages: **Pydantic schema validation** (`models.py`) and the **Grounding & Safety Validation** box - transcript grounding (token overlap), severity downgrade, follow-up evidence re-check, invented-name and unsafe-request guards, provider-failure fallback, and the forced review gate. Only validated, grounded, labelled output is returned to the browser; this is verification of what the model produced, not a guarantee that a model can never be wrong.
 
 ## Flows
 
@@ -85,7 +85,7 @@ User types/speaks: "Open Priya's latest OPG report"
 llm_service.interpret_query(text)
      ├─ live: Gemini ▸ OpenAI → JSON intent + patient_name + report_type
      └─ offline: deterministic parser   (provider error / malformed output →
-          deterministic fallback, surfaced as fallback_reason — never a 500)
+          deterministic fallback, surfaced as fallback_reason - never a 500)
      ▼ Pydantic InterpretedQuery  (invalid intent counts as malformed output)
      │   guards: invented patient name dropped · unsafe request → unsupported
      ▼ retrieval.resolve_patient_name("Priya")        [pure Python, no LLM]
@@ -101,11 +101,11 @@ llm_service.interpret_query(text)
 ```
 Mic button (retrieval or dictation panel)
      ▼
-useSpeechRecognition.js — Web Speech API, Chrome/Edge, en-IN, continuous
+useSpeechRecognition.js - Web Speech API, Chrome/Edge, en-IN, continuous
      ▼ speech ends → final transcript auto-submits (typed input always there)
 POST /query  or  POST /dictation           ← same pipeline as typed text
      │
-     └─ the backend never receives or stores audio — only transcript text
+     └─ the backend never receives or stores audio - only transcript text
        (unsupported browsers simply get the typed-input path)
 ```
 
@@ -121,15 +121,15 @@ structure_dictation(transcript)
      │    (also when the model itself answers "usable": false)
      └─ live: Gemini · offline: deterministic parser → structured JSON
      ▼ Pydantic StructuredDictation { findings[], anatomical_site, draft_report,
-     │    uncertainties[] }  —  requires_review is ALWAYS forced true
+     │    uncertainties[] }  -  requires_review is ALWAYS forced true
      ▼ grounding: findings are re-checked against the transcript (token
-        overlap — unsupported ones dropped); unsupported severities are
+        overlap - unsupported ones dropped); unsupported severities are
         scrubbed, dropped findings flagged
      ▼ frontend:  usable: true  → editable draft + review banner + Save Report
                   usable: false → "nothing to structure", no draft, no Save
      ▼ clinician edits, explicitly confirms, POST /reports
         → reports.json (R###, status final|draft, source_transcript kept);
-          a new patient gets P### — identity-checked, de-duplicated, atomic
+          a new patient gets P### - identity-checked, de-duplicated, atomic
 ```
 
 ### 4. Conversational follow-up
@@ -143,7 +143,7 @@ User asks: "Summarize her report"   (a report is open in the UI)
        retrieval.get_report_by_id(report_id)  ← deterministic, no LLM
      ▼ llm_service.answer_follow_up(question, report)
        system prompt contains ONLY that report's content; answer only from it
-       (that content is sent to the provider as prompt text — the LLM never
+       (that content is sent to the provider as prompt text - the LLM never
         reads the store itself; returned evidence is re-checked after)
      ▼ FollowUpResponse { answer, evidence: [...], source_report_id }
        evidence re-checked against the report → shown next to the answer
@@ -169,7 +169,7 @@ User asks: "Summarize her report"   (a report is open in the UI)
 |---|---|
 | `backend/main.py` | Routes, orchestration, CORS, save-report validation |
 | `backend/models.py` | Pydantic schemas for every input/output |
-| `backend/services/llm_service.py` | Prompts, Gemini/OpenAI calls, offline deterministic fallbacks, grounding checks — **no data-store access** (it sends only prompt text to the provider) |
-| `backend/services/retrieval.py` | JSON reads/writes, name resolution — **no LLM** |
+| `backend/services/llm_service.py` | Prompts, Gemini/OpenAI calls, offline deterministic fallbacks, grounding checks - **no data-store access** (it sends only prompt text to the provider) |
+| `backend/services/retrieval.py` | JSON reads/writes, name resolution - **no LLM** |
 | `frontend/src/App.jsx` | 3-panel UI state machine |
 | `frontend/src/api.js` · `useSpeechRecognition.js` | Fetch client (`localhost:8000`) · Web Speech API input |
