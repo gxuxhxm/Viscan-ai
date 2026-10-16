@@ -1,50 +1,127 @@
-# Viscan AI — Architecture (one page)
+# Viscan AI — Architecture
 
 ## Overview
 
-Viscan AI is a three-panel dental reporting app (React + Vite) talking to a FastAPI backend. Its rule: **the LLM only interprets and structures text — it never touches patient data.** All record reads/writes go through deterministic Python functions over local JSON, every model output is Pydantic-validated and then re-checked against the source text, and with no API key the same pipeline runs on deterministic heuristics (demo mode), so the app is fully functional and testable with zero keys.
+Viscan AI is a three-panel dental reporting app (React + Vite) talking to a FastAPI backend. Its rule: **the LLM only interprets and structures text — it never touches patient data.** All record reads/writes go through deterministic Python functions over local JSON, every model output is Pydantic-validated and then re-checked against the source text, and with no API key the same pipeline runs on deterministic heuristics (demo mode).
+
+## System diagram
 
 ```
-VOICE (browser)                    TEXT
-Mic ─ Web Speech API ─► transcript ┘        ┌─ typed input ─┐
- (Chrome/Edge; typed fallback)              └───────────────┘
-        │  POST /query · /dictation · /follow-up · /reports
-        ▼
-┌────────────────────────── FastAPI (localhost:8000) ──────────────────────────┐
-│                                                                              │
-│  LLM layer — services/llm_service.py  (text → JSON only, no data access)     │
-│   interpret_query()   structure_dictation()   answer_follow_up()             │
-│   live: Gemini gemini-3.5-flash-lite ▸ OpenAI gpt-4o-mini ▸ demo heuristics   │
-│   ─► Pydantic schema (models.py) ─► grounding checks ─► fallback_reason      │
-│                                                                              │
-│  Tool/API layer — services/retrieval.py  (pure Python, no LLM)               │
-│   resolve_patient_name()  get_latest_report_for_patient()                    │
-│   get_report_by_id()      add_report_if_new()  (locked, atomic append)       │
-│                                                                              │
-│  Store: data/patients.json · data/reports.json  (synthetic)                  │
-└──────────────────────────────────────────────────────────────────────────────┘
-        │ validated responses
-        ▼
-Browser: Patient sidebar · Report viewer + editable draft · Conversation panel
-         (every answer shows its source evidence; demo/live badge)
+┌────────────────────────────────────────────────────────────────────────┐
+│                          BROWSER (React + Vite)                        │
+│                                                                        │
+│   ┌─────────────┐    ┌────────────────────┐    ┌────────────────────┐  │
+│   │   Patient   │    │   Report Viewer    │    │   Conversation     │  │
+│   │   Sidebar   │    │   + Dictation      │    │   Panel (AI)       │  │
+│   └──────┬──────┘    └─────────┬──────────┘    └─────────┬──────────┘  │
+│          │                     │                          │            │
+│          └─────────────────────┼──────────────────────────┘            │
+│                                │  api.js (fetch) · Web Speech API      │
+└────────────────────────────────┼───────────────────────────────────────┘
+                                 │ HTTP (CORS) → localhost:8000
+                                 ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                         FastAPI Backend (Python)                       │
+│                                                                        │
+│     /query          /dictation       /follow-up      /patients·reports │
+│        │                │                 │                │           │
+│        ▼                ▼                 ▼                ▼           │
+│   ┌───────────────────────────────┐   ┌───────────────────────────┐    │
+│   │         llm_service.py        │   │        retrieval.py       │    │
+│   │                               │   │                           │    │
+│   │  interpret_query()            │   │  resolve_patient_name()   │    │
+│   │  structure_dictation()        │   │  get_latest_report()      │    │
+│   │  answer_follow_up()           │   │  get_report_by_id()       │    │
+│   │                               │   │  add_report_if_new()      │    │
+│   │  live: Gemini ▸ OpenAI        │   │  Pure Python · no LLM     │    │
+│   │  demo: regex heuristics       │   │                           │    │
+│   └──────────────┬────────────────┘   └─────────────┬─────────────┘    │
+│                  │ Pydantic validation              │ JSON r/w         │
+│                  ▼                                  ▼                  │
+│             models.py                         data/ (JSON)             │
+│        (InterpretedQuery,                    patients.json             │
+│         StructuredDictation,                 reports.json              │
+│         QueryResponse, etc.)                                           │
+└─────────────────────────────────┴──────────────────────────────────────┘
+                                  │
+                         ┌────────┴────────┐
+                         │    Gemini API   │  (when GEMINI_API_KEY is set)
+                         │    flash-tier   │
+                         └─────────────────┘
 ```
 
 ## Flows
 
-### 1. Voice / STT
-Mic button → `useSpeechRecognition.js` (Web Speech API, `en-IN`, continuous) → on speech end the final transcript **auto-submits into the same handler as typed input** → `POST /query` (retrieval) or `POST /dictation` (dictation). No audio is stored or uploaded by the backend; unsupported browsers get the typed-input path.
+### 1. Patient report retrieval
 
-### 2. LLM interpretation
-`POST /query {text}` → `interpret_query()` → Gemini returns a JSON intent (retrieve_report / dictation / follow_up / patient_info / report_count / greeting / assistant_identity / capabilities / small_talk / general_dental / unavailable_action / unsupported …) with `patient_name`, `report_type`, `question`. Output is Pydantic-validated (an out-of-vocabulary intent counts as malformed output), then re-checked in Python: a patient name the model invented — absent from the user's text — is dropped, conversation intents can never target a record, and a request to fabricate clinical content is refused (`intent=unsupported`) regardless of what the model decided. Provider error or malformed JSON → deterministic parser, surfaced as `fallback_reason`, never a 500.
+```
+User types/speaks: "Open Priya's latest OPG report"
+     │
+     ▼ POST /query
+llm_service.interpret_query(text)
+     ├─ live: Gemini ▸ OpenAI → JSON intent + patient_name + report_type
+     └─ demo: regex heuristic   (provider error / malformed output →
+          deterministic fallback, surfaced as fallback_reason — never a 500)
+     ▼ Pydantic InterpretedQuery  (invalid intent counts as malformed output)
+     │   guards: invented patient name dropped · unsafe request → unsupported
+     ▼ retrieval.resolve_patient_name("Priya")        [pure Python, no LLM]
+        1. exact full name  2. exact first  3. exact last  4. fuzzy (0.45)
+     ├─ one patient at that tier → get_latest_report_for_patient(P001, "OPG")
+     ├─ 2+ patients at that tier → ambiguous: true + candidates (UI asks)
+     └─ no match                 → helpful message, never a fabricated record
+     ▼ QueryResponse { intent, report, ambiguous, demo_mode, fallback_reason }
+```
 
-### 3. Tool / API (deterministic retrieval)
-`retrieval.resolve_patient_name()` resolves the extracted name by priority — exact full name → exact first name → exact last name → fuzzy (0.45 threshold; a 0.20 score gap between candidates means ambiguity). One hit → `get_latest_report_for_patient()` / `get_report_by_id()` returns the report; 2+ hits → `ambiguous: true` + candidate list (UI shows a disambiguation card, never a silent pick); no hit → helpful message, never a fabricated record. **No LLM is involved in any read.**
+### 2. Voice / STT
 
-### 4. Report generation (dictation → saved report)
-`POST /dictation {transcript}` → header/metadata lines split off → clinical-vocabulary gate: no clinical signal ⇒ `usable: false`, empty `draft_report`, no Save action (a model `"usable": false` verdict does the same) → otherwise LLM structures `{findings[], anatomical_site, draft_report, uncertainties[]}` → Pydantic validates with **`requires_review` forced `true`** → grounding pass keeps only findings verbatim present in the transcript and strips unsupported severities → `DictationResponse` renders an editable draft with a review banner. The clinician edits it, explicitly confirms, and `POST /reports` appends `{R###, findings, source_transcript, status: final|draft, clinician_confirmed}` to `reports.json` (existing patient by id, or a new `P###` patient — identity-verified, de-duplicated, atomic write), after which the record is retrievable through every read endpoint.
+```
+Mic button (retrieval or dictation panel)
+     ▼
+useSpeechRecognition.js — Web Speech API, Chrome/Edge, en-IN, continuous
+     ▼ speech ends → final transcript auto-submits (typed input always there)
+POST /query  or  POST /dictation           ← same pipeline as typed text
+     │
+     └─ the backend never receives or stores audio — only transcript text
+       (unsupported browsers simply get the typed-input path)
+```
 
-### 5. Conversational follow-up (report-aware chat)
-With a report open, `POST /query {question, session_context:{active_report_id}}` classifies `intent=follow_up` and returns that report (fetched deterministically); the frontend then calls `POST /follow-up {question, report_id}`, where the system prompt contains **only that report's content** and the model is constrained to answer from it. Evidence strings are re-checked against the report (fabricated evidence is replaced by the report's own findings) and displayed with the answer. No open report → guidance to open one, no invented context.
+### 3. Clinical dictation → report generation
+
+```
+Clinician dictates or pastes a transcript
+     │
+     ▼ POST /dictation
+structure_dictation(transcript)
+     ├─ header/metadata lines split off first
+     ├─ no clinical vocabulary → no findings, draft_report = "", usable: false
+     │    (also when the model itself answers "usable": false)
+     └─ live: Gemini ▸ demo heuristics → structured JSON
+     ▼ Pydantic StructuredDictation { findings[], anatomical_site, draft_report,
+     │    uncertainties[] }  —  requires_review is ALWAYS forced true
+     ▼ grounding: only findings verbatim in the transcript survive; unsupported
+        severities are scrubbed, dropped findings flagged
+     ▼ frontend:  usable: true  → editable draft + review banner + Save Report
+                  usable: false → "nothing to structure", no draft, no Save
+     ▼ clinician edits, explicitly confirms, POST /reports
+        → reports.json (R###, status final|draft, source_transcript kept);
+          a new patient gets P### — identity-checked, de-duplicated, atomic
+```
+
+### 4. Conversational follow-up
+
+```
+User asks: "Summarize her report"   (a report is open in the UI)
+     │
+     ▼ POST /query { question, session_context: { active_report_id } }
+       intent = follow_up · get_report_by_id()  ← deterministic, no LLM
+     ▼ frontend calls POST /follow-up { question, report_id }
+       retrieval.get_report_by_id(report_id)  ← deterministic, no LLM
+     ▼ llm_service.answer_follow_up(question, report)
+       system prompt contains ONLY that report's content; answer only from it
+     ▼ FollowUpResponse { answer, evidence: [...], source_report_id }
+       evidence re-checked against the report → shown next to the answer
+     ▼ no open report → guided reply, no invented context
+```
 
 ## Safety properties
 
@@ -56,7 +133,6 @@ With a report open, `POST /query {question, session_context:{active_report_id}}`
 | Evidence shown | Every follow-up answer lists the exact report text it used |
 | Safe identity handling | Priority-tier name resolution; ambiguity surfaced, never guessed; invented names dropped |
 | Graceful failure | Provider/malformed-output → deterministic fallback with `fallback_reason`, never a 500 |
-| Provider-free identity | Greeting/identity answers are canned text — the app never names its underlying AI provider |
 | No real patient data | Fully synthetic fixtures; local-only reads and writes |
 
 ## Components
