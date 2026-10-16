@@ -184,6 +184,41 @@ def test_dictation_response_saves_as_structured_report(isolated_data):
     assert data["id"] in [r["id"] for r in client.get("/patients/P001/reports").json()]
 
 
+def test_dictation_unspecified_severity_and_site_survive_save_retrieve(isolated_data):
+    """A dictation finding whose severity is 'unspecified' (no grade stated) and
+    its anatomical site survive the save → retrieval round-trip unchanged, and
+    no tooth number is invented for a descriptive site."""
+    findings = [
+        {"site": "lower right third molar", "observation": "Horizontally impacted",
+         "severity": "unspecified", "context": "current"},
+    ]
+    resp = client.post("/reports", json={
+        "draft_report": (
+            "CLINICAL DICTATION DRAFT\nFINDINGS:\n"
+            "- Lower right third molar: horizontally impacted.\n\n"
+            "REVIEW STATUS: Requires clinician confirmation."
+        ),
+        "patient_id": "P003",  # Arjun Mehta
+        "report_type": "OPG",
+        "findings": findings,
+        "transcript": "lower right third molar is horizontally impacted",
+        "anatomical_site": "Lower right third molar",
+        "clinician_confirmed": True,
+        "demo_mode": False,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    f = data["findings"][0]
+    # observation + anatomical site + severity all preserved, nothing invented
+    assert f["observation"] == "Horizontally impacted"
+    assert f["site"] == "lower right third molar"
+    assert f["severity"] == "unspecified"
+    assert data["anatomical_site"] == "Lower right third molar"
+    assert data["tooth_number"] is None
+    # retrievable through the patient's report list
+    assert data["id"] in [r["id"] for r in client.get("/patients/P003/reports").json()]
+
+
 def test_existing_report_records_untouched_after_append(isolated_data):
     """Appending must not reformat the hand-formatted records already on disk."""
     path = isolated_data / "reports.json"

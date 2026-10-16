@@ -4,10 +4,15 @@ __pycache__/
 *.pyo
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 .venv/
 venv/
 env/
+
+# Secrets / environment files (only the empty template is committed)
 .env
+.env.*
+!.env.example
 
 # Frontend
 node_modules/

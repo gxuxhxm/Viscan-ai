@@ -1557,6 +1557,73 @@ def _apply_metadata_finding_guard(result: StructuredDictation) -> StructuredDict
     return result
 
 
+# ── Severity grounding (no invented grades) ─────────────────────────────────
+# The live model is asked for a severity per finding, but a transcript may state
+# no grade at all ("lower right third molar is horizontally impacted"). To keep
+# a claim of "mild"/"moderate"/"severe" it must be literally present in the
+# transcript; otherwise the grade is a guess and is downgraded to "unspecified".
+# Mirrors the demo parser's _SEVERITY_RULES so both paths obey the same
+# "only when stated" contract, and covers the "no new findings" dictations that
+# legitimately carry severity "none".
+_SEVERITY_STATED = {
+    "severe": re.compile(r"\b(?:severe|severely)\b", re.I),
+    "moderate": re.compile(r"\b(?:moderate|moderately)\b", re.I),
+    "mild": re.compile(r"\b(?:mild|mildly|slight|slightly)\b", re.I),
+    "none": re.compile(
+        r"\b(?:within normal limits|no significant (?:findings|abnormalities|pathology)"
+        r"|appears? normal|is normal|no pathology|no periapical patholog\w*"
+        r"|no caries|no abnormalit\w*|unremarkable"
+        r"|no new (?:radiographic )?(?:findings|issues|concerns|abnormalities)"
+        r"|no additional (?:findings|observations)|no findings)\b",
+        re.I,
+    ),
+}
+
+# Grade words that may appear in the model-written prose. Used to scrub an
+# unsupported grade out of the readable draft (a finding-level downgrade alone
+# would leave the invented word in the report body).
+_SEVERITY_GRADE_WORDS = {
+    "severe": ("severe", "severely"),
+    "moderate": ("moderate", "moderately"),
+    "mild": ("mild", "mildly"),
+}
+
+
+def _ground_severity(transcript: str, findings: list) -> tuple[list, int]:
+    """Deterministic no-invention guard for severity. Keep a claimed grade only
+    when its word literally appears anywhere in the transcript (the model often
+    condenses the observation and drops the grade word, so the check is against
+    the whole transcript, not just the observation); otherwise downgrade the
+    grade to "unspecified". Returns (findings, downgraded_count)."""
+    downgraded = 0
+    for item in findings:
+        grade = str(item.get("severity", "")).strip().lower()
+        if grade in ("", "unspecified"):
+            item["severity"] = "unspecified"
+            continue
+        pattern = _SEVERITY_STATED.get(grade)
+        if pattern is None or not pattern.search(transcript):
+            item["severity"] = "unspecified"
+            downgraded += 1
+    return findings, downgraded
+
+
+def _scrub_unsupported_severity(text: str, transcript: str) -> str:
+    """Remove a grade word from the readable draft when the transcript never
+    stated it, so the prose cannot reintroduce an invented severity after the
+    finding-level downgrade. Only m/m/s grades are touched; "none" is left alone
+    (it is a common English word with no clinical-grade meaning here)."""
+    if not text:
+        return text
+    out = text
+    for label, words in _SEVERITY_GRADE_WORDS.items():
+        if _SEVERITY_STATED[label].search(transcript):
+            continue  # stated in the dictation → the word is supported, keep it
+        for w in words:
+            out = re.sub(rf"\b{w}\b\s*", "", out, flags=re.IGNORECASE)
+    return out
+
+
 def structure_dictation(transcript: str) -> StructuredDictation:
     """
     Use LLM to convert a clinical dictation transcript into structured JSON.
@@ -1609,7 +1676,7 @@ def structure_dictation(transcript: str) -> StructuredDictation:
         "NEVER invent or infer clinical observations not explicitly mentioned.\n\n"
         "Output ONLY a JSON object with:\n"
         '  "findings": list of {"site": str, "observation": str, '
-        '"severity": "none"|"mild"|"moderate"|"severe", '
+        '"severity": "none"|"mild"|"moderate"|"severe"|"unspecified", '
         '"context": "historical"|"current"}\n'
         '  "anatomical_site": string summarising the primary region\n'
         '  "draft_report": a professional radiological report draft\n'
@@ -1636,6 +1703,10 @@ def structure_dictation(transcript: str) -> StructuredDictation:
         "- Never claim a condition has improved, worsened, or remained unchanged unless "
         "  the dictation says so; never invent measurements, diagnoses, or treatment "
         "  recommendations.\n"
+        '- Set "severity" ONLY when the dictation literally states a grade (e.g. "mild", '
+        '  "moderate", "severe", "within normal limits", "no caries", "no new findings"). '
+        '  When no grade is stated for a finding, use "severity": "unspecified" — never '
+        "  guess or infer a grade from how the finding sounds.\n"
         "- Follow any instruction the dictation gives about how the report should be "
         "  written (e.g. separating historical from current findings, stating that "
         "  current findings require radiographic assessment and clinician review).\n"
@@ -1745,6 +1816,22 @@ def structure_dictation(transcript: str) -> StructuredDictation:
         return _deterministic_structuring_fallback(clinical, metadata, transcript, reason)
 
     logger.info("dictation: structured via %s; %d finding(s)", provider, len(structured.findings))
+
+    # Severity grounding: the model may only report a grade the dictation
+    # literally stated. An unsupported grade becomes "unspecified" and is
+    # surfaced as an uncertainty, so it can never reach the client or a save.
+    structured.findings, sev_downgraded = _ground_severity(clinical, structured.findings)
+    if sev_downgraded:
+        logger.warning(
+            "dictation: %d ungrounded severity label(s) downgraded to 'unspecified' in %s output",
+            sev_downgraded, provider,
+        )
+        structured.uncertainties = list(structured.uncertainties) + [
+            f"{sev_downgraded} severity label(s) discarded: severity not stated in the transcript"
+        ]
+    # The readable draft must not reintroduce an unsupported grade the
+    # finding-level downgrade just removed.
+    structured.draft_report = _scrub_unsupported_severity(structured.draft_report, clinical)
 
     for item in structured.findings:
         item.setdefault("site", "unspecified")
