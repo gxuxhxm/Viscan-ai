@@ -202,8 +202,6 @@ Optional `frontend/.env`:
 VITE_API_URL=http://localhost:8000
 ```
 
-**Secrets handling:** no API key exists anywhere in the committed code - only the empty `.env.example` template is tracked. `.env` (backend and frontend) is listed in `.gitignore` and is not, and has never been, committed; verify any time with:
-
 ```powershell
 git check-ignore backend/.env     # → matches .gitignore
 git ls-files backend/.env         # → empty (nothing to push)
